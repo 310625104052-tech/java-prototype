@@ -197,8 +197,8 @@ def detect_walls_from_image_bytes(image_bytes: bytes) -> Dict[str, Any]:
 
     detected_centerlines: List[Dict[str, Any]] = []
     if hough_lines is not None:
-        for line in hough_lines:
-            x1, y1, x2, y2 = line[0]
+        # OpenCV <=4 returns (N, 1, 4); OpenCV 5 returns (N, 4). Normalise to (N, 4).
+        for x1, y1, x2, y2 in np.asarray(hough_lines).reshape(-1, 4):
             length = math.hypot(x2 - x1, y2 - y1)
             if length < float(DETECTION_CONFIG["MIN_WALL_LENGTH_PX"]):
                 continue
@@ -479,7 +479,17 @@ def detect_walls_from_image_bytes(image_bytes: bytes) -> Dict[str, Any]:
 
     # 9. Room & Floor Space Segmentation
     # Invert structural wall mask to find enclosed spaces
-    void_mask = cv2.bitwise_not(structural_wall_mask)
+    # Seal every detected door/window gap first. Otherwise any opening leaks the
+    # interior into the exterior (or into its neighbours) and no room is found.
+    sealed_mask = structural_wall_mask.copy()
+    seal_width = max(2, int(DETECTION_CONFIG["DEFAULT_WALL_THICKNESS_PX"]))
+    for op in detected_openings:
+        ox, oy, half_w = int(op["x"]), int(op["y"]), int(op["width"] // 2) + 1
+        if op["orientation"] == "horizontal":
+            cv2.line(sealed_mask, (ox - half_w, oy), (ox + half_w, oy), 255, seal_width)
+        else:
+            cv2.line(sealed_mask, (ox, oy - half_w), (ox, oy + half_w), 255, seal_width)
+    void_mask = cv2.bitwise_not(sealed_mask)
     num_rooms, room_labels, room_stats, room_centroids = cv2.connectedComponentsWithStats(void_mask)
 
     detected_rooms: List[Dict[str, Any]] = []
