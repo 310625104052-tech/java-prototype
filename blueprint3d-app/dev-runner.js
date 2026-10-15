@@ -28,7 +28,7 @@ function checkHealth() {
 
 function startFastAPI() {
   console.log(`[DevRunner] Starting FastAPI on port ${FASTAPI_PORT}...`);
-  const proc = spawn('python3', ['backend/main.py'], {
+  const proc = spawn(process.platform === 'win32' ? 'py' : 'python3', ['backend/main.py'], {
     stdio: ['ignore', 'inherit', 'inherit'],
     env: { ...process.env, PYTHONPATH: '.' },
   });
@@ -49,7 +49,7 @@ async function main() {
 
   // 1. Start Vite IMMEDIATELY on port 3000 so the UI and dev server are immediately available
   console.log(`[DevRunner] Starting Vite on port ${VITE_PORT}...`);
-  const viteProc = spawn('node', ['./node_modules/vite/bin/vite.js', `--port=${VITE_PORT}`, '--host=0.0.0.0'], {
+  const viteProc = spawn('node', ['./node_modules/vite/bin/vite.js', `--port=${VITE_PORT}`], {
     stdio: 'inherit',
     env: process.env,
   });

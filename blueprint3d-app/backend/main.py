@@ -1,10 +1,18 @@
+import logging
+import os
+import sys
+
+# Must be set before cv2 is imported: caps decoded pixel count so a tiny
+# compressed file can't expand into gigabytes of RAM (decompression bomb).
+os.environ.setdefault("OPENCV_IO_MAX_IMAGE_PIXELS", str(50_000_000))
+
 from fastapi import FastAPI, File, UploadFile, HTTPException, status, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
 import uvicorn
-import os
-import sys
+
+logger = logging.getLogger("blueprint3d")
 
 # Ensure backend directory and project root are on sys.path
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -21,14 +29,15 @@ except Exception as imp_err1:
         from wall_detector import detect_walls_from_image_bytes, DETECTION_CONFIG
         WALL_DETECTOR_AVAILABLE = True
     except Exception as imp_err2:
-        print(f"[Backend Warning] wall_detector import failed: {imp_err1} | {imp_err2}")
+        logger.warning("wall_detector import failed: %s | %s", imp_err1, imp_err2)
         detect_walls_from_image_bytes = None
         DETECTION_CONFIG = {}
         WALL_DETECTOR_AVAILABLE = False
 
 app = FastAPI(title="Blueprint3D Backend API", version="0.3.0")
 
-# Custom Exception Handlers - GUARANTEES ONLY JSON IS RETURNED, NEVER HTML
+
+# Custom exception handlers - guarantee only JSON is returned, never HTML
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
     errors = exc.errors()
@@ -43,42 +52,37 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
         }
     )
 
+
 @app.exception_handler(HTTPException)
 async def http_exception_handler(request: Request, exc: HTTPException):
     return JSONResponse(
         status_code=exc.status_code,
-        content={
-            "success": False,
-            "error": str(exc.detail)
-        }
+        content={"success": False, "error": str(exc.detail)}
     )
+
 
 @app.exception_handler(Exception)
 async def generic_exception_handler(request: Request, exc: Exception):
+    # Log details server-side; never echo internals to the client.
+    logger.exception("Unhandled error on %s", request.url.path)
     return JSONResponse(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-        content={
-            "success": False,
-            "error": f"Internal server error: {str(exc)}"
-        }
+        content={"success": False, "error": "Internal server error."}
     )
 
-# Enable CORS for development and proxying
+
+# Local dev only: the Vite dev server (port 3000) proxies /api, so browsers
+# normally never make cross-origin calls. Allow just the dev origins, no cookies.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
+    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+    allow_credentials=False,
+    allow_methods=["GET", "POST"],
     allow_headers=["*"],
 )
 
 ALLOWED_EXTENSIONS = {".png", ".jpg", ".jpeg"}
-ALLOWED_CONTENT_TYPES = {
-    "image/png",
-    "image/jpeg",
-    "image/pjpeg",
-    "image/jpg",
-}
+MAX_UPLOAD_BYTES = 15 * 1024 * 1024  # 15 MB
 
 
 @app.get("/api/health")
@@ -103,6 +107,10 @@ async def detect_blueprint_get_help():
     )
 
 
+def _error(code: int, message: str) -> JSONResponse:
+    return JSONResponse(status_code=code, content={"success": False, "error": message})
+
+
 @app.post("/api/blueprint/detect")
 @app.post("/api/blueprint/upload")
 async def process_and_detect_blueprint(file: UploadFile = File(...)):
@@ -111,97 +119,49 @@ async def process_and_detect_blueprint(file: UploadFile = File(...)):
     and returns detected wall line segments, dimensions, debug overlay, and binary image.
     """
     if not file or not file.filename:
-        return JSONResponse(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            content={
-                "success": False,
-                "error": "No file was uploaded. Please select a valid PNG or JPEG blueprint image."
-            }
-        )
+        return _error(status.HTTP_400_BAD_REQUEST,
+                      "No file was uploaded. Please select a valid PNG or JPEG blueprint image.")
 
     filename = file.filename
-    lower_filename = filename.lower()
+    # Extension is the gate; the client-supplied Content-Type is not trustworthy.
+    if not any(filename.lower().endswith(ext) for ext in ALLOWED_EXTENSIONS):
+        return _error(status.HTTP_400_BAD_REQUEST,
+                      f"Invalid file format for '{filename}'. Only PNG, JPG, and JPEG files are supported.")
 
-    # Validate file extension
-    has_valid_ext = any(lower_filename.endswith(ext) for ext in ALLOWED_EXTENSIONS)
-
-    # Validate content type
-    content_type = file.content_type or ""
-    is_valid_type = content_type.lower() in ALLOWED_CONTENT_TYPES or has_valid_ext
-
-    if not (has_valid_ext and is_valid_type):
-        return JSONResponse(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            content={
-                "success": False,
-                "error": f"Invalid file format for '{filename}'. Only PNG, JPG, and JPEG files are supported."
-            }
-        )
-
+    # Read at most MAX_UPLOAD_BYTES + 1 so oversized uploads are rejected
+    # without buffering the whole body.
     try:
-        # Read uploaded image bytes directly into memory
-        contents = await file.read()
-    except Exception as read_err:
-        return JSONResponse(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            content={
-                "success": False,
-                "error": f"Failed to read uploaded file: {str(read_err)}"
-            }
-        )
+        contents = await file.read(MAX_UPLOAD_BYTES + 1)
+    except Exception:
+        logger.exception("Failed to read upload")
+        return _error(status.HTTP_500_INTERNAL_SERVER_ERROR, "Failed to read uploaded file.")
 
     size_bytes = len(contents)
     if size_bytes == 0:
-        return JSONResponse(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            content={
-                "success": False,
-                "error": "Uploaded file is empty (0 bytes)."
-            }
-        )
+        return _error(status.HTTP_400_BAD_REQUEST, "Uploaded file is empty (0 bytes).")
+    if size_bytes > MAX_UPLOAD_BYTES:
+        return _error(status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                      f"File too large. Maximum size is {MAX_UPLOAD_BYTES // (1024 * 1024)} MB.")
 
     if not WALL_DETECTOR_AVAILABLE or detect_walls_from_image_bytes is None:
-        return JSONResponse(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            content={
-                "success": False,
-                "error": "The structural wall detection module is currently initializing or unavailable."
-            }
-        )
+        return _error(status.HTTP_503_SERVICE_UNAVAILABLE,
+                      "The structural wall detection module is currently initializing or unavailable.")
 
-    # Run the OpenCV wall detection pipeline
     try:
         detection_result = detect_walls_from_image_bytes(contents)
-    except Exception as detection_err:
-        return JSONResponse(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            content={
-                "success": False,
-                "error": f"Unexpected error during OpenCV processing: {str(detection_err)}"
-            }
-        )
+    except Exception:
+        logger.exception("Wall detection crashed")
+        return _error(status.HTTP_500_INTERNAL_SERVER_ERROR,
+                      "Unexpected error during blueprint processing.")
 
     if not detection_result.get("success", False):
-        return JSONResponse(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            content={
-                "success": False,
-                "error": detection_result.get("error", "Wall detection failed on the provided image.")
-            }
-        )
+        return _error(status.HTTP_422_UNPROCESSABLE_ENTITY,
+                      detection_result.get("error", "Wall detection failed on the provided image."))
 
-    # Cache uploaded blueprint for testing and inspection
-    try:
-        with open("/tmp/last_uploaded_blueprint.png", "wb") as f_out:
-            f_out.write(contents)
-    except Exception:
-        pass
-
-    # Add metadata to response
     response_payload = {
         "success": True,
         "filename": filename,
-        "content_type": content_type or "image/png",
+        "content_type": file.content_type or "image/png",
         "size_bytes": size_bytes,
         "walls": detection_result["walls"],
         "wall_count": len(detection_result["walls"]),
@@ -223,4 +183,5 @@ async def process_and_detect_blueprint(file: UploadFile = File(...)):
 
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8001)
+    # Loopback only: this dev backend has no authentication.
+    uvicorn.run(app, host="127.0.0.1", port=8001)

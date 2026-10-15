@@ -2,5 +2,5 @@
   "name": "Blueprint3D",
   "description": "Blueprint3D — College Floor Digital Twin & Interactive 3D Walkthrough with procedural wall detection and first-person walkthrough.",
   "requestFramePermissions": [],
-  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+  "majorCapabilities": []
 }
