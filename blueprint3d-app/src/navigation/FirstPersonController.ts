@@ -8,6 +8,11 @@ export interface ControllerOptions {
   eyeHeight?: number;
 }
 
+// Largest single mouse delta (px) treated as real input.
+const MAX_MOUSE_DELTA_PX = 250;
+// Longest collision sub-step (m). Must stay below player radius + half a wall's thickness.
+const MAX_STEP_M = 0.08;
+
 export class FirstPersonController {
   private camera: THREE.PerspectiveCamera;
   private domElement: HTMLElement;
@@ -40,6 +45,12 @@ export class FirstPersonController {
   // Subtle head-bobbing for walking immersion
   private walkDistance: number = 0;
   public enableHeadBob: boolean = true;
+
+  // Throttle for React-facing position updates (see emitPosition)
+  private lastEmitTime: number = 0;
+  private lastEmitX: number = NaN;
+  private lastEmitZ: number = NaN;
+  private lastEmitYaw: number = NaN;
 
   // Listeners
   private onLockChangeCallback?: (isLocked: boolean) => void;
@@ -147,6 +158,9 @@ export class FirstPersonController {
 
   private onPointerLockChange(): void {
     this.isLocked = document.pointerLockElement === this.domElement;
+    if (!this.isLocked) {
+      this.keys.forward = this.keys.backward = this.keys.left = this.keys.right = this.keys.sprint = false;
+    }
     if (this.onLockChangeCallback) {
       this.onLockChangeCallback(this.isLocked);
     }
@@ -170,6 +184,11 @@ export class FirstPersonController {
     const movementX = event.movementX || 0;
     const movementY = event.movementY || 0;
 
+    // Browsers occasionally deliver one huge bogus delta (pointer-lock warp, or a long
+    // stalled frame). A real flick never moves this far in a single event, and applying
+    // it whips the view around, so drop it.
+    if (Math.abs(movementX) > MAX_MOUSE_DELTA_PX || Math.abs(movementY) > MAX_MOUSE_DELTA_PX) return;
+
     this.yaw -= movementX * this.mouseSensitivity;
     this.pitch -= movementY * this.mouseSensitivity;
 
@@ -183,6 +202,8 @@ export class FirstPersonController {
   private onKeyDown(event: KeyboardEvent): void {
     // If typing in an input field or modal, don't capture
     if ((event.target as HTMLElement)?.tagName === 'INPUT') return;
+    // Only react while walking; otherwise keys would move an invisible camera behind overlays
+    if (!this.isLocked) return;
 
     switch (event.code) {
       case 'KeyW':
@@ -256,10 +277,29 @@ export class FirstPersonController {
       this.camera.rotation.set(this.pitch, this.yaw, 0, 'YXZ');
     }
     this.velocity.set(0, 0, 0);
+    this.emitPosition(true);
+  }
 
-    if (this.onPositionUpdateCallback) {
-      this.onPositionUpdateCallback(this.camera.position.x, this.camera.position.z, this.yaw);
+  /**
+   * Reports the player position to the UI. update() runs every frame, but each report
+   * re-renders React, so only report real changes, at most ~10 times a second.
+   */
+  private emitPosition(force: boolean): void {
+    if (!this.onPositionUpdateCallback) return;
+
+    const { x, z } = this.camera.position;
+    const now = performance.now();
+    if (!force) {
+      if (now - this.lastEmitTime < 100) return;
+      const moved = Math.hypot(x - this.lastEmitX, z - this.lastEmitZ);
+      if (moved < 0.05 && Math.abs(this.yaw - this.lastEmitYaw) < 0.03) return;
     }
+
+    this.lastEmitTime = now;
+    this.lastEmitX = x;
+    this.lastEmitZ = z;
+    this.lastEmitYaw = this.yaw;
+    this.onPositionUpdateCallback(x, z, this.yaw);
   }
 
   public update(deltaSeconds: number): void {
@@ -277,9 +317,12 @@ export class FirstPersonController {
     const speed = this.moveSpeed * (this.keys.sprint ? this.sprintMultiplier : 1.0);
 
     // Smooth movement damping (drag / deceleration)
+    // Exponential decay is stable at any frame length. The old linear form
+    // (v -= v * 12 * dt) overshoots past zero and flips direction once dt > 1/12 s.
     const damping = 12.0;
-    this.velocity.x -= this.velocity.x * damping * delta;
-    this.velocity.z -= this.velocity.z * damping * delta;
+    const drag = Math.exp(-damping * delta);
+    this.velocity.x *= drag;
+    this.velocity.z *= drag;
 
     if (isMoving) {
       // Calculate movement vector relative to camera horizontal yaw
@@ -308,25 +351,31 @@ export class FirstPersonController {
       }
     }
 
-    // Proposed new position
     const currentX = this.camera.position.x;
     const currentZ = this.camera.position.z;
 
-    const proposedX = currentX + this.velocity.x * delta;
-    const proposedZ = currentZ + this.velocity.z * delta;
+    // Move in short sub-steps so a long frame can never carry the player across a thin
+    // wall in one jump (collision only resolves overlap, it does not sweep).
+    const travel = Math.hypot(this.velocity.x, this.velocity.z) * delta;
+    const steps = Math.min(12, Math.max(1, Math.ceil(travel / MAX_STEP_M)));
+    const stepDelta = delta / steps;
 
-    // Check & resolve collisions against walls
-    const resolved = this.collisionSystem.resolvePosition(proposedX, proposedZ);
+    for (let i = 0; i < steps; i++) {
+      const resolved = this.collisionSystem.resolvePosition(
+        this.camera.position.x + this.velocity.x * stepDelta,
+        this.camera.position.z + this.velocity.z * stepDelta
+      );
 
-    this.camera.position.x = resolved.x;
-    this.camera.position.z = resolved.z;
+      this.camera.position.x = resolved.x;
+      this.camera.position.z = resolved.z;
 
-    // Smooth wall sliding: project velocity vector onto wall tangent
-    if (resolved.collided && (resolved.normalX !== 0 || resolved.normalZ !== 0)) {
-      const dot = this.velocity.x * resolved.normalX + this.velocity.z * resolved.normalZ;
-      if (dot < 0) {
-        this.velocity.x -= dot * resolved.normalX;
-        this.velocity.z -= dot * resolved.normalZ;
+      // Smooth wall sliding: project velocity vector onto wall tangent
+      if (resolved.collided && (resolved.normalX !== 0 || resolved.normalZ !== 0)) {
+        const dot = this.velocity.x * resolved.normalX + this.velocity.z * resolved.normalZ;
+        if (dot < 0) {
+          this.velocity.x -= dot * resolved.normalX;
+          this.velocity.z -= dot * resolved.normalZ;
+        }
       }
     }
 
@@ -345,8 +394,6 @@ export class FirstPersonController {
       this.camera.position.y = this.eyeHeight;
     }
 
-    if (this.onPositionUpdateCallback) {
-      this.onPositionUpdateCallback(this.camera.position.x, this.camera.position.z, this.yaw);
-    }
+    this.emitPosition(false);
   }
 }

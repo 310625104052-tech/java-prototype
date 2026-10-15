@@ -64,20 +64,7 @@ export default function App() {
 
     manager.start();
 
-    const handleGlobalKeyDown = (e: KeyboardEvent) => {
-      if ((e.target as HTMLElement)?.tagName === 'INPUT') return;
-
-      if (e.code === 'KeyC') {
-        manager.toggleCeiling();
-      } else if (e.code === 'KeyR') {
-        manager.resetPlayerPosition();
-      }
-    };
-
-    window.addEventListener('keydown', handleGlobalKeyDown);
-
     return () => {
-      window.removeEventListener('keydown', handleGlobalKeyDown);
       manager.dispose();
       sceneManagerRef.current = null;
     };

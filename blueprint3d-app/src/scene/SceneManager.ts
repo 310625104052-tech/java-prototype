@@ -50,7 +50,11 @@ export class SceneManager {
     this.renderer.setSize(container.clientWidth || 1, container.clientHeight || 1);
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.renderer.shadowMap.enabled = true;
-    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    this.renderer.shadowMap.type = THREE.PCFShadowMap;
+    // Walls and lights never move, so rendering the 2048px shadow map every frame is
+    // wasted GPU time. Re-render it only when the scene changes (see refreshShadows).
+    this.renderer.shadowMap.autoUpdate = false;
+    this.renderer.shadowMap.needsUpdate = true;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.05;
 
@@ -133,7 +137,13 @@ export class SceneManager {
     this.controller.setPosition(spawn.x, spawn.z || 1.65, spawn.y, spawn.yaw || 0);
   }
 
+  /** Ask three.js to redraw the (otherwise frozen) shadow map on the next frame. */
+  private refreshShadows(): void {
+    this.renderer.shadowMap.needsUpdate = true;
+  }
+
   public loadFloorPlan(floorPlanData: FloorPlanData): void {
+    this.refreshShadows();
     this.floorPlanData = floorPlanData;
     if (this.floorPlanRenderer) {
       this.scene.remove(this.floorPlanRenderer.rootGroup);
@@ -150,6 +160,7 @@ export class SceneManager {
   }
 
   public toggleCeiling(): boolean {
+    this.refreshShadows();
     const isVisible = this.floorPlanRenderer.toggleCeiling();
     // Adjust sunlight exposure when ceiling is toggled
     if (isVisible) {
@@ -161,6 +172,7 @@ export class SceneManager {
   }
 
   public setCeilingVisible(visible: boolean): void {
+    this.refreshShadows();
     this.floorPlanRenderer.setCeilingVisible(visible);
     this.renderer.toneMappingExposure = visible ? 1.15 : 1.0;
   }
