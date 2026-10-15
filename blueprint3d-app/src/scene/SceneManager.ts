@@ -201,6 +201,10 @@ export class SceneManager {
     }
     this.controller.dispose();
     this.renderer.dispose();
+    // dispose() frees GPU resources but keeps the WebGL context alive. Browsers cap
+    // live contexts (~16 in Chrome) and then block the page, which StrictMode
+    // double-mounts and hot reloads hit quickly, so release it explicitly.
+    this.renderer.forceContextLoss();
     if (this.renderer.domElement.parentElement) {
       this.renderer.domElement.parentElement.removeChild(this.renderer.domElement);
     }

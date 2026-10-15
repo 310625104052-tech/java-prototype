@@ -15,6 +15,7 @@ export default function App() {
   const [modelFileName, setModelFileName] = useState('');
   const [showDetailedMap, setShowDetailedMap] = useState(false);
   const [isLocked, setIsLocked] = useState(false);
+  const [graphicsError, setGraphicsError] = useState(false);
   const [lockError, setLockError] = useState<string | null>(null);
   const [playerPos, setPlayerPos] = useState({
     x: sampleCollegeFloorPlan.spawnPoint.x,
@@ -25,7 +26,15 @@ export default function App() {
   useEffect(() => {
     if (!containerRef.current) return;
 
-    const manager = new SceneManager(containerRef.current, sampleCollegeFloorPlan);
+    let manager: SceneManager;
+    try {
+      manager = new SceneManager(containerRef.current, sampleCollegeFloorPlan);
+    } catch (err) {
+      console.error('Could not start the 3D renderer:', err);
+      setGraphicsError(true);
+      return;
+    }
+    setGraphicsError(false);
     sceneManagerRef.current = manager;
 
     manager.controller.setOnLockChange((locked) => {
@@ -113,6 +122,22 @@ export default function App() {
           }
         }}
       />
+
+      {graphicsError && (
+        <div
+          role="alert"
+          className="absolute inset-0 z-50 flex items-center justify-center bg-slate-950 px-6 text-center"
+        >
+          <div className="max-w-md">
+            <h1 className="text-xl font-bold text-white">3D graphics could not start</h1>
+            <p className="mt-3 text-sm text-slate-300">
+              Your browser blocked WebGL for this page. This usually happens after many reloads in one tab.
+              Close this tab and open the app in a new one. If it keeps happening, make sure hardware
+              acceleration is turned on in your browser settings.
+            </p>
+          </div>
+        </div>
+      )}
 
       <UIManager
         floorPlan={currentFloorPlan}
