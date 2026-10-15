@@ -35,7 +35,7 @@ export class SceneManager {
     this.scene.fog = new THREE.FogExp2(0xdce7f3, 0.015);
 
     // 2. Camera setup
-    const aspect = container.clientWidth / (container.clientHeight || 1);
+    const aspect = (container.clientWidth || 1) / (container.clientHeight || 1);
     this.camera = new THREE.PerspectiveCamera(70, aspect, 0.1, 100);
 
     // Initial camera position
@@ -47,7 +47,7 @@ export class SceneManager {
       antialias: true,
       powerPreference: 'high-performance',
     });
-    this.renderer.setSize(container.clientWidth, container.clientHeight);
+    this.renderer.setSize(container.clientWidth || 1, container.clientHeight || 1);
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
@@ -175,6 +175,9 @@ export class SceneManager {
       this.animationFrameId = requestAnimationFrame(animate);
 
       const delta = this.clock.getDelta();
+      // Container not laid out (or hidden) yet: drawing now would target a
+      // zero-size framebuffer and spam GL_INVALID_FRAMEBUFFER_OPERATION.
+      if (this.container.clientWidth === 0 || this.container.clientHeight === 0) return;
       this.controller.update(delta);
       this.renderer.render(this.scene, this.camera);
     };

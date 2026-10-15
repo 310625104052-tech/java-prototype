@@ -12,6 +12,7 @@ export default function App() {
 
   const [currentFloorPlan, setCurrentFloorPlan] = useState<FloorPlanData>(sampleCollegeFloorPlan);
   const [isLocked, setIsLocked] = useState(false);
+  const [lockError, setLockError] = useState<string | null>(null);
   const [isCeilingVisible, setIsCeilingVisible] = useState(true);
   const [uploadedBlueprint, setUploadedBlueprint] = useState<UploadedBlueprint | null>(null);
   const [playerPos, setPlayerPos] = useState({
@@ -30,7 +31,10 @@ export default function App() {
     // Controller callbacks
     manager.controller.setOnLockChange((locked) => {
       setIsLocked(locked);
+      if (locked) setLockError(null);
     });
+
+    manager.controller.setOnLockError(setLockError);
 
     manager.controller.setOnPositionUpdate((x, z, yaw) => {
       setPlayerPos({ x, z, yaw });
@@ -70,6 +74,7 @@ export default function App() {
   }, []);
 
   const handleEnterFirstPerson = () => {
+    setLockError(null);
     sceneManagerRef.current?.controller.requestLock();
   };
 
@@ -161,6 +166,7 @@ export default function App() {
       <UIManager
         floorPlan={currentFloorPlan}
         isLocked={isLocked}
+        lockError={lockError}
         isCeilingVisible={isCeilingVisible}
         playerPos={playerPos}
         blueprint={uploadedBlueprint}

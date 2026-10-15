@@ -43,6 +43,7 @@ export class FirstPersonController {
 
   // Listeners
   private onLockChangeCallback?: (isLocked: boolean) => void;
+  private onLockErrorCallback?: (message: string) => void;
   private onPositionUpdateCallback?: (x: number, z: number, yaw: number) => void;
   private onToggleMapCallback?: () => void;
   private onToggleCeilingCallback?: () => void;
@@ -101,6 +102,10 @@ export class FirstPersonController {
     this.onLockChangeCallback = callback;
   }
 
+  public setOnLockError(callback: (message: string) => void): void {
+    this.onLockErrorCallback = callback;
+  }
+
   public setOnPositionUpdate(callback: (x: number, z: number, yaw: number) => void): void {
     this.onPositionUpdateCallback = callback;
   }
@@ -120,9 +125,12 @@ export class FirstPersonController {
   public requestLock(): void {
     if (!this.isLocked) {
       try {
-        this.domElement.requestPointerLock();
+        // Modern browsers return a Promise that rejects when the lock is refused
+        // (embedded/sandboxed frames, denied permission); older ones return undefined.
+        const result = this.domElement.requestPointerLock() as unknown as Promise<void> | undefined;
+        result?.catch?.((err: unknown) => this.reportLockError(err));
       } catch (err) {
-        console.warn('Pointer lock request failed:', err);
+        this.reportLockError(err);
       }
     }
   }
@@ -145,7 +153,15 @@ export class FirstPersonController {
   }
 
   private onPointerLockError(event: Event): void {
-    console.warn('Pointer lock error occurred', event);
+    this.reportLockError(event);
+  }
+
+  private reportLockError(cause: unknown): void {
+    console.warn('Pointer lock unavailable:', cause);
+    this.onLockErrorCallback?.(
+      'Mouse capture was blocked, so the walkthrough cannot start here. ' +
+        'Open the app in a normal browser tab (not an embedded preview) and click again.'
+    );
   }
 
   private onMouseMove(event: MouseEvent): void {

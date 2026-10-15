@@ -26,6 +26,7 @@ import { LocationSystem } from '../navigation/LocationSystem';
 interface UIManagerProps {
   floorPlan: FloorPlanData;
   isLocked: boolean;
+  lockError?: string | null;
   isCeilingVisible: boolean;
   playerPos: { x: number; z: number; yaw: number };
   blueprint: UploadedBlueprint | null;
@@ -43,6 +44,7 @@ interface UIManagerProps {
 export function UIManager({
   floorPlan,
   isLocked,
+  lockError,
   isCeilingVisible,
   playerPos,
   blueprint,
@@ -365,6 +367,16 @@ export function UIManager({
                 </div>
               </div>
             </div>
+
+            {lockError && (
+              <div
+                id="pointer-lock-error"
+                role="alert"
+                className="mb-3 rounded-xl border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-[11px] leading-snug text-amber-200"
+              >
+                {lockError}
+              </div>
+            )}
 
             {/* Quick action buttons */}
             <div className="flex items-center gap-3">
