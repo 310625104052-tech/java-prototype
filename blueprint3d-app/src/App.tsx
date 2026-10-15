@@ -1,20 +1,21 @@
 import { useEffect, useRef, useState } from 'react';
 import { SceneManager } from './scene/SceneManager';
-import { sampleFloorPlan } from './data/sampleFloorPlan';
 import { sampleCollegeFloorPlan } from './data/sampleCollegeFloorPlan';
 import { UIManager } from './ui/UIManager';
-import { UploadedBlueprint } from './types/blueprint';
 import { FloorPlanData } from './types/floorplan';
 
 export default function App() {
   const containerRef = useRef<HTMLDivElement>(null);
   const sceneManagerRef = useRef<SceneManager | null>(null);
 
+  // The scene needs a plan to boot with; it stays hidden behind the start screen
+  // until the user uploads their own.
   const [currentFloorPlan, setCurrentFloorPlan] = useState<FloorPlanData>(sampleCollegeFloorPlan);
+  const [hasModel, setHasModel] = useState(false);
+  const [modelFileName, setModelFileName] = useState('');
+  const [showDetailedMap, setShowDetailedMap] = useState(false);
   const [isLocked, setIsLocked] = useState(false);
   const [lockError, setLockError] = useState<string | null>(null);
-  const [isCeilingVisible, setIsCeilingVisible] = useState(true);
-  const [uploadedBlueprint, setUploadedBlueprint] = useState<UploadedBlueprint | null>(null);
   const [playerPos, setPlayerPos] = useState({
     x: sampleCollegeFloorPlan.spawnPoint.x,
     z: sampleCollegeFloorPlan.spawnPoint.y,
@@ -24,11 +25,9 @@ export default function App() {
   useEffect(() => {
     if (!containerRef.current) return;
 
-    // Initialize 3D Scene Manager with College Science & Tech Floor Plan
     const manager = new SceneManager(containerRef.current, sampleCollegeFloorPlan);
     sceneManagerRef.current = manager;
 
-    // Controller callbacks
     manager.controller.setOnLockChange((locked) => {
       setIsLocked(locked);
       if (locked) setLockError(null);
@@ -41,24 +40,26 @@ export default function App() {
     });
 
     manager.controller.setOnToggleCeiling(() => {
-      const visible = manager.toggleCeiling();
-      setIsCeilingVisible(visible);
+      manager.toggleCeiling();
     });
 
     manager.controller.setOnResetPlayer(() => {
       manager.resetPlayerPosition();
     });
 
-    // Start render loop
+    // The map is a normal mouse-driven overlay, so release the pointer first.
+    manager.controller.setOnToggleMap(() => {
+      manager.controller.exitLock();
+      setShowDetailedMap(true);
+    });
+
     manager.start();
 
-    // Global keyboard shortcuts for quick testing & faculty presentation
     const handleGlobalKeyDown = (e: KeyboardEvent) => {
       if ((e.target as HTMLElement)?.tagName === 'INPUT') return;
 
       if (e.code === 'KeyC') {
-        const visible = manager.toggleCeiling();
-        setIsCeilingVisible(visible);
+        manager.toggleCeiling();
       } else if (e.code === 'KeyR') {
         manager.resetPlayerPosition();
       }
@@ -78,74 +79,25 @@ export default function App() {
     sceneManagerRef.current?.controller.requestLock();
   };
 
-  const handleToggleCeiling = () => {
-    if (sceneManagerRef.current) {
-      const visible = sceneManagerRef.current.toggleCeiling();
-      setIsCeilingVisible(visible);
-    }
-  };
-
-  const handleResetPosition = () => {
-    sceneManagerRef.current?.resetPlayerPosition();
-  };
-
   const handleTeleport = (x: number, y: number) => {
-    if (sceneManagerRef.current) {
-      sceneManagerRef.current.controller.setPosition(x, 1.65, y);
-    }
+    sceneManagerRef.current?.controller.setPosition(x, 1.65, y);
   };
 
-  const handleLoadSampleHouse = () => {
-    if (sceneManagerRef.current) {
-      sceneManagerRef.current.loadFloorPlan(sampleFloorPlan);
-      setCurrentFloorPlan(sampleFloorPlan);
-      setIsCeilingVisible(true);
-      setPlayerPos({
-        x: sampleFloorPlan.spawnPoint.x,
-        z: sampleFloorPlan.spawnPoint.y,
-        yaw: sampleFloorPlan.spawnPoint.yaw || 0,
-      });
-    }
+  const handlePlanReady = (plan: FloorPlanData, fileName: string) => {
+    sceneManagerRef.current?.loadFloorPlan(plan);
+    setCurrentFloorPlan(plan);
+    setModelFileName(fileName);
+    setPlayerPos({
+      x: plan.spawnPoint.x,
+      z: plan.spawnPoint.y,
+      yaw: plan.spawnPoint.yaw || 0,
+    });
+    setHasModel(true);
   };
 
-  const handleLoadCollegeFloorPlan = () => {
-    if (sceneManagerRef.current) {
-      sceneManagerRef.current.loadFloorPlan(sampleCollegeFloorPlan);
-      setCurrentFloorPlan(sampleCollegeFloorPlan);
-      setIsCeilingVisible(true);
-      setPlayerPos({
-        x: sampleCollegeFloorPlan.spawnPoint.x,
-        z: sampleCollegeFloorPlan.spawnPoint.y,
-        yaw: sampleCollegeFloorPlan.spawnPoint.yaw || 0,
-      });
-    }
-  };
-
-  const handleLoadGeneratedFloorPlan = (newPlan: FloorPlanData) => {
-    if (sceneManagerRef.current) {
-      sceneManagerRef.current.loadFloorPlan(newPlan);
-      setCurrentFloorPlan(newPlan);
-      setIsCeilingVisible(true);
-      setPlayerPos({
-        x: newPlan.spawnPoint.x,
-        z: newPlan.spawnPoint.y,
-        yaw: newPlan.spawnPoint.yaw || 0,
-      });
-    }
-  };
-
-  const handleBlueprintUploaded = (blueprint: UploadedBlueprint) => {
-    if (uploadedBlueprint?.previewUrl) {
-      URL.revokeObjectURL(uploadedBlueprint.previewUrl);
-    }
-    setUploadedBlueprint(blueprint);
-  };
-
-  const handleClearBlueprint = () => {
-    if (uploadedBlueprint?.previewUrl) {
-      URL.revokeObjectURL(uploadedBlueprint.previewUrl);
-    }
-    setUploadedBlueprint(null);
+  const handleNewUpload = () => {
+    sceneManagerRef.current?.controller.exitLock();
+    setHasModel(false);
   };
 
   return (
@@ -156,29 +108,25 @@ export default function App() {
         ref={containerRef}
         className="w-full h-full cursor-pointer focus:outline-none"
         onClick={() => {
-          if (!isLocked) {
+          if (hasModel && !isLocked && !showDetailedMap) {
             handleEnterFirstPerson();
           }
         }}
       />
 
-      {/* User Interface HUD & Controls */}
       <UIManager
         floorPlan={currentFloorPlan}
+        hasModel={hasModel}
+        modelFileName={modelFileName}
         isLocked={isLocked}
         lockError={lockError}
-        isCeilingVisible={isCeilingVisible}
         playerPos={playerPos}
-        blueprint={uploadedBlueprint}
+        showDetailedMap={showDetailedMap}
+        onShowDetailedMap={setShowDetailedMap}
         onEnterFirstPerson={handleEnterFirstPerson}
-        onToggleCeiling={handleToggleCeiling}
-        onResetPosition={handleResetPosition}
         onTeleport={handleTeleport}
-        onLoadSampleHouse={handleLoadSampleHouse}
-        onLoadCollegeFloorPlan={handleLoadCollegeFloorPlan}
-        onLoadGeneratedFloorPlan={handleLoadGeneratedFloorPlan}
-        onBlueprintUploaded={handleBlueprintUploaded}
-        onClearBlueprint={handleClearBlueprint}
+        onPlanReady={handlePlanReady}
+        onNewUpload={handleNewUpload}
       />
     </main>
   );
