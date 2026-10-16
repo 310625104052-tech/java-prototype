@@ -6,3 +6,6 @@ server.js
 !.env.example
 __pycache__/
 *.pyc
+
+.vercel
+.env*
