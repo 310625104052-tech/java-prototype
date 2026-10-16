@@ -76,11 +76,17 @@ async def generic_exception_handler(request: Request, exc: Exception):
     )
 
 
-# Local dev only: the Vite dev server (port 3000) proxies /api, so browsers
-# normally never make cross-origin calls. Allow just the dev origins, no cookies.
+# Comma-separated list of origins allowed to call this API from a browser. Locally the
+# Vite dev server proxies /api so this never matters; in production set it to the
+# frontend's URL (e.g. https://blueprint3d.vercel.app). No cookies/credentials are used.
+ALLOWED_ORIGINS = [
+    origin.strip()
+    for origin in os.environ.get("ALLOWED_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000").split(",")
+    if origin.strip()
+]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=False,
     allow_methods=["GET", "POST"],
     allow_headers=["*"],

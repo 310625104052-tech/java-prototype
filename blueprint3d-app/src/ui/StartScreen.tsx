@@ -6,6 +6,8 @@ import { convertDetectionToFloorPlan } from '../utils/detectionToFloorPlan';
 import { ImportReview } from './ImportReview';
 import { generateSampleBlueprintFile } from '../utils/sampleBlueprintGenerator';
 
+// Backend base URL. Empty in dev (Vite proxies /api); set VITE_API_URL in production.
+const API_BASE = (import.meta.env.VITE_API_URL ?? '').replace(/\/+$/, '');
 // Keep in sync with MAX_UPLOAD_BYTES in backend/main.py
 const MAX_UPLOAD_MB = 15;
 const ACCEPTED_EXTENSIONS = /\.(png|jpe?g|dxf)$/i;
@@ -37,7 +39,7 @@ export function StartScreen({ onPlanReady }: StartScreenProps) {
     try {
       const formData = new FormData();
       formData.append('file', file);
-      const response = await fetch('/api/blueprint/detect', { method: 'POST', body: formData });
+      const response = await fetch(`${API_BASE}/api/blueprint/detect`, { method: 'POST', body: formData });
 
       if (!(response.headers.get('content-type') || '').includes('application/json')) {
         throw new Error('The server sent an unexpected response. Is the backend running?');
