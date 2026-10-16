@@ -1,3 +1,5 @@
+> **Scope:** this document describes the legacy root Flask/Java prototype. For the active React/FastAPI prototype and its detector, read [`blueprint3d-app/README.md`](blueprint3d-app/README.md). The saved Graphify snapshot covers the legacy app.
+
 # Blueprint Explorer — architecture reference
 
 For a future session that needs to work in this repo without re-reading everything.

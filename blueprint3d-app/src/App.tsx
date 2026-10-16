@@ -12,6 +12,7 @@ export default function App() {
   // until the user uploads their own.
   const [currentFloorPlan, setCurrentFloorPlan] = useState<FloorPlanData>(sampleCollegeFloorPlan);
   const [hasModel, setHasModel] = useState(false);
+  const [isOverview, setIsOverview] = useState(true);
   const [modelFileName, setModelFileName] = useState('');
   const [showDetailedMap, setShowDetailedMap] = useState(false);
   const [isLocked, setIsLocked] = useState(false);
@@ -72,6 +73,8 @@ export default function App() {
 
   const handleEnterFirstPerson = () => {
     setLockError(null);
+    sceneManagerRef.current?.setOverview(false);
+    setIsOverview(false);
     sceneManagerRef.current?.controller.requestLock();
   };
 
@@ -88,6 +91,7 @@ export default function App() {
       z: plan.spawnPoint.y,
       yaw: plan.spawnPoint.yaw || 0,
     });
+    setIsOverview(true);
     setHasModel(true);
   };
 
@@ -104,7 +108,7 @@ export default function App() {
         ref={containerRef}
         className="w-full h-full cursor-pointer focus:outline-none"
         onClick={() => {
-          if (hasModel && !isLocked && !showDetailedMap) {
+          if (hasModel && !isOverview && !isLocked && !showDetailedMap) {
             handleEnterFirstPerson();
           }
         }}
@@ -129,6 +133,8 @@ export default function App() {
       <UIManager
         floorPlan={currentFloorPlan}
         hasModel={hasModel}
+        isOverview={isOverview}
+        onOverview={() => { sceneManagerRef.current?.setOverview(true); setIsOverview(true); }}
         modelFileName={modelFileName}
         isLocked={isLocked}
         lockError={lockError}

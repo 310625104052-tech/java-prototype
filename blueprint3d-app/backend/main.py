@@ -34,6 +34,11 @@ except Exception as imp_err1:
         DETECTION_CONFIG = {}
         WALL_DETECTOR_AVAILABLE = False
 
+try:
+    from backend.blueprint_import import import_blueprint
+except ImportError:
+    from blueprint_import import import_blueprint
+
 app = FastAPI(title="Blueprint3D Backend API", version="0.3.0")
 
 
@@ -81,7 +86,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-ALLOWED_EXTENSIONS = {".png", ".jpg", ".jpeg"}
+ALLOWED_EXTENSIONS = {".png", ".jpg", ".jpeg", ".dxf"}
 MAX_UPLOAD_BYTES = 15 * 1024 * 1024  # 15 MB
 
 
@@ -126,7 +131,7 @@ async def process_and_detect_blueprint(file: UploadFile = File(...)):
     # Extension is the gate; the client-supplied Content-Type is not trustworthy.
     if not any(filename.lower().endswith(ext) for ext in ALLOWED_EXTENSIONS):
         return _error(status.HTTP_400_BAD_REQUEST,
-                      f"Invalid file format for '{filename}'. Only PNG, JPG, and JPEG files are supported.")
+                      f"Invalid file format for '{filename}'. Use PNG, JPG, JPEG, or DXF files.")
 
     # Read at most MAX_UPLOAD_BYTES + 1 so oversized uploads are rejected
     # without buffering the whole body.
@@ -148,7 +153,9 @@ async def process_and_detect_blueprint(file: UploadFile = File(...)):
                       "The structural wall detection module is currently initializing or unavailable.")
 
     try:
-        detection_result = detect_walls_from_image_bytes(contents)
+        detection_result = import_blueprint(contents, filename)
+    except ValueError as exc:
+        return _error(status.HTTP_400_BAD_REQUEST, str(exc))
     except Exception:
         logger.exception("Wall detection crashed")
         return _error(status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -160,6 +167,9 @@ async def process_and_detect_blueprint(file: UploadFile = File(...)):
 
     response_payload = {
         "success": True,
+        "mode": detection_result.get("mode", "model"),
+        "import_info": detection_result.get("import_info", {}),
+        "preview_image": detection_result.get("preview_image", ""),
         "filename": filename,
         "content_type": file.content_type or "image/png",
         "size_bytes": size_bytes,
@@ -168,6 +178,7 @@ async def process_and_detect_blueprint(file: UploadFile = File(...)):
         "wall_regions": detection_result.get("wall_regions", []),
         "openings": detection_result.get("openings", []),
         "rooms": detection_result.get("rooms", []),
+        "shell": detection_result.get("shell"),
         "scale": detection_result.get("scale", {}),
         "debug_layers": detection_result.get("debug_layers", {}),
         "image_width": detection_result["image_width"],

@@ -1,3 +1,5 @@
+> **Current prototype:** the React/FastAPI app is in [`blueprint3d-app/`](blueprint3d-app/README.md), running on localhost:3000. The root Flask/Java app documented below is the older prototype.
+
 # Blueprint Explorer
 
 ![Python](https://img.shields.io/badge/python-3.10%2B-3776AB?logo=python&logoColor=white)

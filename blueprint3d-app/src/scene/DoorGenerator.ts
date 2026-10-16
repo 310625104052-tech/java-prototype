@@ -116,9 +116,8 @@ export class DoorGenerator {
 
     // Position and orientation in world
     doorGroup.position.set(door.x, 0, door.y);
-    if (isVertical) {
-      doorGroup.rotation.y = Math.PI / 2;
-    }
+    if (door.angle !== undefined) doorGroup.rotation.y = -door.angle;
+    else if (isVertical) doorGroup.rotation.y = Math.PI / 2;
 
     return doorGroup;
   }

@@ -1,3 +1,4 @@
+import type { BuildingShell } from './floorplan';
 export interface UploadedBlueprint {
   file?: File;
   fileName: string;
@@ -165,6 +166,10 @@ export interface PipelineCounts {
 
 export interface WallDetectionResult {
   success: boolean;
+  shell?: BuildingShell;
+  mode?: 'model' | 'reference';
+  preview_image?: string;
+  import_info?: { warnings: string[]; method?: string; reviewRequired?: boolean; layers?: Record<string, number>; sourceSize?: number[] };
   error?: string;
   filename: string;
   content_type?: string;

@@ -1,164 +1,52 @@
-import { WallDetectionResult } from '../types/blueprint';
-import { FloorPlanData, WallData, DoorData, WindowData, RoomData } from '../types/floorplan';
+import type { WallDetectionResult } from '../types/blueprint';
+import type { FloorPlanData, PlanPolygon } from '../types/floorplan';
 
-/**
- * Converts detected 2D structural blueprint data into a full 3D navigable FloorPlanData model.
- * Applies metric scale calibration (pixels -> meters), coordinate centering,
- * and academic space configuration.
- */
+/** Preserve the detector's one coordinate system for walls, floors and openings. */
 export function convertDetectionToFloorPlan(result: WallDetectionResult): FloorPlanData {
-  const ppm = result.scale?.pixelsPerMeter || 40.0;
-
-  // 1. Determine bounding box in image pixels to normalize origin
-  let minPxX = Infinity;
-  let minPxY = Infinity;
-  let maxPxX = -Infinity;
-  let maxPxY = -Infinity;
-
-  for (const w of result.walls) {
-    minPxX = Math.min(minPxX, w.x1, w.x2);
-    minPxY = Math.min(minPxY, w.y1, w.y2);
-    maxPxX = Math.max(maxPxX, w.x1, w.x2);
-    maxPxY = Math.max(maxPxY, w.y1, w.y2);
-  }
-
-  if (minPxX === Infinity) {
-    minPxX = 0;
-    minPxY = 0;
-    maxPxX = result.image_width || 800;
-    maxPxY = result.image_height || 600;
-  }
-
-  const originX = minPxX;
-  const originY = minPxY;
-
-  // 2. Convert walls to metric coordinates (meters)
-  const walls: WallData[] = result.walls.map((w, index) => {
-    const x1 = Math.round(((w.x1 - originX) / ppm) * 100) / 100;
-    const y1 = Math.round(((w.y1 - originY) / ppm) * 100) / 100;
-    const x2 = Math.round(((w.x2 - originX) / ppm) * 100) / 100;
-    const y2 = Math.round(((w.y2 - originY) / ppm) * 100) / 100;
-
-    const rawThickMeters = (w.thickness || 12) / ppm;
-    const thickness = Math.max(0.15, Math.min(0.40, Math.round(rawThickMeters * 100) / 100));
-
-    return {
-      id: w.id || `wall-${index + 1}`,
-      x1,
-      y1,
-      x2,
-      y2,
-      thickness,
-      height: 3.2,
-      type: w.wallType === 'exterior' ? 'exterior' : 'interior',
-      color: w.wallType === 'exterior' ? '#334155' : '#cbd5e1',
-    };
+  if (!result.shell?.layers.length) throw new Error('The server did not return connected building geometry. Restart the backend and upload again.');
+  const ppm = result.scale?.pixelsPerMeter || 40;
+  const points = result.shell?.footprint.flatMap(p => p.outer)
+    ?? result.walls.flatMap(w => [[w.x1, w.y1], [w.x2, w.y2]]);
+  const originX = Math.min(...points.map(p => p[0]));
+  const originY = Math.min(...points.map(p => p[1]));
+  const point = ([x, y]: number[]): [number, number] => [(x-originX)/ppm, (y-originY)/ppm];
+  const polygon = (p: PlanPolygon): PlanPolygon => ({outer: p.outer.map(point), holes: p.holes.map(h => h.map(point))});
+  const shell = result.shell ? {
+    layers: result.shell.layers.map(l => ({...l, polygons: l.polygons.map(polygon)})),
+    collision: result.shell.collision.map(polygon),
+    footprint: result.shell.footprint.map(polygon),
+    spawn: {x: (result.shell.spawn.x-originX)/ppm, y: (result.shell.spawn.y-originY)/ppm},
+  } : undefined;
+  const walls = result.walls.map((w, i) => ({
+    id: w.id || `wall-${i+1}`, x1: (w.x1-originX)/ppm, y1: (w.y1-originY)/ppm,
+    x2: (w.x2-originX)/ppm, y2: (w.y2-originY)/ppm, thickness: (w.thickness || 12)/ppm,
+    height: 3.2, type: w.wallType === 'exterior' ? 'exterior' as const : 'interior' as const,
+  }));
+  const opening = (op: NonNullable<WallDetectionResult['openings']>[number]) => ({
+    id: op.id, wallId: op.wallId, x: (op.x-originX)/ppm, y: (op.y-originY)/ppm,
+    width: op.width/ppm, orientation: op.orientation,
   });
-
-  // 3. Convert openings (doors & windows)
-  const doors: DoorData[] = [];
-  const windows: WindowData[] = [];
-
-  const openingsList = result.openings || [];
-  openingsList.forEach((op, index) => {
-    const x = Math.round(((op.x - originX) / ppm) * 100) / 100;
-    const y = Math.round(((op.y - originY) / ppm) * 100) / 100;
-    const rawWidthM = op.width / ppm;
-    const width = Math.max(0.85, Math.min(2.4, Math.round(rawWidthM * 100) / 100));
-
-    if (op.type === 'window') {
-      windows.push({
-        id: op.id || `window-${index + 1}`,
-        wallId: op.wallId,
-        x,
-        y,
-        width,
-        height: 1.5,
-        sillHeight: 0.9,
-        orientation: op.orientation === 'vertical' ? 'vertical' : 'horizontal',
-      });
-    } else {
-      doors.push({
-        id: op.id || `door-${index + 1}`,
-        wallId: op.wallId,
-        x,
-        y,
-        width,
-        height: 2.3,
-        orientation: op.orientation === 'vertical' ? 'vertical' : 'horizontal',
-        name: op.subType === 'double_door' ? 'Double Access Door' : 'Faculty / Lab Door',
-        isOpen: false,
-      });
-    }
-  });
-
-  // 4. Convert rooms
-  const roomsList = result.rooms || [];
-  const rooms: RoomData[] = roomsList.map((r, index) => {
-    const rawX = (r.x !== undefined ? r.x : r.bbox?.x) || 0;
-    const rawY = (r.y !== undefined ? r.y : r.bbox?.y) || 0;
-    const rawW = (r.width !== undefined ? r.width : r.bbox?.width) || 40;
-    const rawH = (r.height !== undefined ? r.height : r.bbox?.height) || 40;
-
-    const x = Math.round(((rawX - originX) / ppm) * 100) / 100;
-    const y = Math.round(((rawY - originY) / ppm) * 100) / 100;
-    const width = Math.round((rawW / ppm) * 100) / 100;
-    const height = Math.round((rawH / ppm) * 100) / 100;
-
-    let floorType: 'hardwood' | 'ceramic' | 'marble' | 'carpet' | 'slate' = 'slate';
-    if (r.type === 'lab' || r.type === 'classroom') floorType = 'ceramic';
-    else if (r.type === 'lecture_hall') floorType = 'hardwood';
-    else if (r.type === 'office') floorType = 'carpet';
-    else if (r.type === 'restroom' || r.type === 'stairwell') floorType = 'marble';
-
-    return {
-      id: r.id || `room-${index + 1}`,
-      name: r.name || `Room ${index + 1}`,
-      x,
-      y,
-      width,
-      height,
-      floorType,
-      color: r.color || '#475569',
-    };
-  });
-
-  // 5. Calculate bounds & optimal spawn point
-  const boundsMaxX = Math.round(((maxPxX - originX) / ppm) * 100) / 100;
-  const boundsMaxY = Math.round(((maxPxY - originY) / ppm) * 100) / 100;
-
-  // Find corridor room or center of building to spawn player
-  const corridor = rooms.find((r) => r.name.toLowerCase().includes('corridor'));
-  let spawnX = boundsMaxX / 2;
-  let spawnY = boundsMaxY / 2;
-
-  if (corridor) {
-    spawnX = corridor.x + corridor.width / 2;
-    spawnY = corridor.y + corridor.height / 2;
-  }
-
+  const doors = (result.openings || []).filter(o => o.type !== 'window').map(o => ({
+    ...opening(o), height: 2.3, name: 'Door', isOpen: true,
+  }));
+  const windows = (result.openings || []).filter(o => o.type === 'window').map(o => ({
+    ...opening(o), height: 1.5, sillHeight: .9,
+  }));
+  const rooms = (result.rooms || []).map((r, i) => ({
+    id: r.id, name: `Room ${i+1}`, x: ((r.x ?? r.bbox?.x ?? 0)-originX)/ppm,
+    y: ((r.y ?? r.bbox?.y ?? 0)-originY)/ppm,
+    width: (r.width ?? r.bbox?.width ?? 0)/ppm, height: (r.height ?? r.bbox?.height ?? 0)/ppm,
+    polygon: r.polygon?.map(point), type: 'general' as const,
+    floorType: 'ceramic' as const, color: '#ded9d2', areaM2: r.areaM2,
+  }));
+  const spawn = shell?.spawn ?? {x: rooms[0]?.x + rooms[0]?.width/2 || 1, y: rooms[0]?.y + rooms[0]?.height/2 || 1};
   return {
-    name: 'College Building Floor Twin',
-    description: `Generated from uploaded blueprint: ${result.filename} with ${walls.length} structural walls, ${doors.length} doors, and ${rooms.length} educational spaces.`,
-    unit: 'meters',
-    bounds: {
-      minX: 0,
-      minY: 0,
-      maxX: Math.max(boundsMaxX, 10),
-      maxY: Math.max(boundsMaxY, 10),
-    },
-    defaultWallHeight: 3.2,
-    defaultExteriorThickness: 0.28,
-    defaultInteriorThickness: 0.16,
-    spawnPoint: {
-      x: Math.round(spawnX * 10) / 10,
-      y: Math.round(spawnY * 10) / 10,
-      z: 1.65,
-      yaw: 0,
-    },
-    walls,
-    doors,
-    windows,
-    rooms,
+    source: 'detected', shell, importWarnings: result.import_info?.warnings, name: result.filename || 'Uploaded floor plan',
+    description: 'Reconstructed from the uploaded structural floor plan. Scale is estimated from opening widths.',
+    unit: 'meters', bounds: {minX: 0, minY: 0,
+      maxX: (Math.max(...points.map(p => p[0]))-originX)/ppm,
+      maxY: (Math.max(...points.map(p => p[1]))-originY)/ppm},
+    defaultWallHeight: 3.2, defaultExteriorThickness: .25, defaultInteriorThickness: .15,
+    spawnPoint: {...spawn, z: 1.65, yaw: 0}, walls, doors, windows, rooms,
   };
 }

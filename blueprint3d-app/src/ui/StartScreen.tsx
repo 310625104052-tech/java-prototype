@@ -3,11 +3,12 @@ import { Box, Download, FileImage, Loader2, TriangleAlert, Upload } from 'lucide
 import { WallDetectionResult } from '../types/blueprint';
 import { FloorPlanData } from '../types/floorplan';
 import { convertDetectionToFloorPlan } from '../utils/detectionToFloorPlan';
+import { ImportReview } from './ImportReview';
 import { generateSampleBlueprintFile } from '../utils/sampleBlueprintGenerator';
 
 // Keep in sync with MAX_UPLOAD_BYTES in backend/main.py
 const MAX_UPLOAD_MB = 15;
-const ACCEPTED_TYPES = ['image/png', 'image/jpeg'];
+const ACCEPTED_EXTENSIONS = /\.(png|jpe?g|dxf)$/i;
 
 interface StartScreenProps {
   onPlanReady: (plan: FloorPlanData, fileName: string) => void;
@@ -18,12 +19,13 @@ export function StartScreen({ onPlanReady }: StartScreenProps) {
   const [isDragging, setIsDragging] = useState(false);
   const [busyFile, setBusyFile] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [review,setReview] = useState<WallDetectionResult | null>(null);
 
   const processFile = async (file: File) => {
     setError(null);
 
-    if (!ACCEPTED_TYPES.includes(file.type)) {
-      setError('That file type is not supported. Please upload a PNG or JPG floor plan.');
+    if (!ACCEPTED_EXTENSIONS.test(file.name)) {
+      setError('Please upload a PNG, JPG or DXF drawing.');
       return;
     }
     if (file.size > MAX_UPLOAD_MB * 1024 * 1024) {
@@ -44,11 +46,8 @@ export function StartScreen({ onPlanReady }: StartScreenProps) {
       if (!response.ok || !data.success) {
         throw new Error(data.error || 'Could not read walls from that image.');
       }
-      if (!data.walls || data.walls.length === 0) {
-        throw new Error('No walls were found in that image. Try a plan with clear, dark wall lines.');
-      }
-
-      onPlanReady(convertDetectionToFloorPlan(data), file.name);
+      if (data.mode==='reference' || data.import_info?.reviewRequired) setReview(data);
+      else onPlanReady(convertDetectionToFloorPlan(data), file.name);
     } catch (err) {
       setError(
         err instanceof TypeError
@@ -75,6 +74,8 @@ export function StartScreen({ onPlanReady }: StartScreenProps) {
 
   const isBusy = busyFile !== null;
 
+  if (review) return <ImportReview result={review} onReady={plan=>onPlanReady(plan,review.filename)} onBack={()=>setReview(null)}/>;
+
   return (
     <div className="absolute inset-0 z-40 flex flex-col items-center justify-center bg-slate-950 px-4">
       <div className="absolute top-5 left-6 flex items-center gap-2 text-slate-300">
@@ -86,7 +87,7 @@ export function StartScreen({ onPlanReady }: StartScreenProps) {
         <h1 className="text-2xl sm:text-3xl font-bold tracking-tight text-white">
           Turn a 2D floor plan into a 3D model you can walk through
         </h1>
-        <p className="mt-2 text-sm text-slate-400">Upload a floor plan image to get started.</p>
+        <p className="mt-2 text-sm text-slate-400">Upload a floor plan image or DXF drawing to get started.</p>
 
         <div
           onDragOver={(e) => {
@@ -108,7 +109,7 @@ export function StartScreen({ onPlanReady }: StartScreenProps) {
             ref={inputRef}
             id="blueprint-file-input"
             type="file"
-            accept=".png,.jpg,.jpeg,image/png,image/jpeg"
+            accept=".png,.jpg,.jpeg,.dxf,image/png,image/jpeg,application/dxf"
             className="hidden"
             onChange={(e) => {
               const file = e.target.files?.[0];
@@ -119,8 +120,8 @@ export function StartScreen({ onPlanReady }: StartScreenProps) {
           {isBusy ? (
             <div className="flex flex-col items-center gap-3 px-6 py-14" role="status" aria-live="polite">
               <Loader2 className="w-9 h-9 text-sky-400 animate-spin" />
-              <div className="text-sm font-semibold text-white">Building your 3D model…</div>
-              <div className="text-xs text-slate-400">Reading walls, doors and rooms from {busyFile}</div>
+              <div className="text-sm font-semibold text-white">Importing your drawing...</div>
+              <div className="text-xs text-slate-400">Reading drawing geometry from {busyFile}</div>
             </div>
           ) : (
             <button
@@ -135,7 +136,7 @@ export function StartScreen({ onPlanReady }: StartScreenProps) {
               <span className="text-base font-semibold text-white">Drop your floor plan here, or click to browse</span>
               <span className="flex items-center gap-1.5 text-xs text-slate-400">
                 <FileImage className="w-3.5 h-3.5" />
-                PNG or JPG · up to {MAX_UPLOAD_MB} MB · clear wall lines work best
+                PNG, JPG or DXF | up to {MAX_UPLOAD_MB} MB | automatic reconstruction or wall tracing
               </span>
             </button>
           )}

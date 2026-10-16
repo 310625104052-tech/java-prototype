@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { FloorPlanData } from '../types/floorplan';
 import { CollisionSystem } from '../navigation/CollisionSystem';
 import { FirstPersonController } from '../navigation/FirstPersonController';
@@ -16,6 +17,8 @@ export class SceneManager {
   public floorPlanData: FloorPlanData;
 
   private clock: THREE.Clock;
+  private orbit: OrbitControls;
+  private overview = false;
   private animationFrameId: number | null = null;
   private isRunning: boolean = false;
   private resizeObserver: ResizeObserver | null = null;
@@ -32,7 +35,7 @@ export class SceneManager {
     // 1. Scene setup
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color(0xdce7f3); // Soft sky atmosphere
-    this.scene.fog = new THREE.FogExp2(0xdce7f3, 0.015);
+    this.scene.fog = null;
 
     // 2. Camera setup
     const aspect = (container.clientWidth || 1) / (container.clientHeight || 1);
@@ -77,6 +80,11 @@ export class SceneManager {
       this.collisionSystem
     );
     this.resetPlayerPosition();
+
+    this.orbit = new OrbitControls(this.camera, this.renderer.domElement);
+    this.orbit.enabled = false;
+    this.orbit.enableDamping = true;
+    this.orbit.maxPolarAngle = Math.PI / 2 - .03;
 
     // 7. Lighting
     this.setupLighting();
@@ -147,6 +155,7 @@ export class SceneManager {
     this.floorPlanData = floorPlanData;
     if (this.floorPlanRenderer) {
       this.scene.remove(this.floorPlanRenderer.rootGroup);
+      this.floorPlanRenderer.dispose();
     }
     this.collisionSystem = new CollisionSystem();
     const { bounds } = this.floorPlanData;
@@ -156,7 +165,38 @@ export class SceneManager {
     this.floorPlanRenderer.build();
     this.scene.add(this.floorPlanRenderer.rootGroup);
     this.controller.setCollisionSystem(this.collisionSystem);
-    this.resetPlayerPosition();
+    const cx = (bounds.minX+bounds.maxX)/2;
+    const cz = (bounds.minY+bounds.maxY)/2;
+    const d = Math.max(bounds.maxX-bounds.minX, bounds.maxY-bounds.minY, 10);
+    this.sunLight.position.set(cx+d, d*1.5, cz+d);
+    this.sunLight.target.position.set(cx, 0, cz);
+    this.scene.add(this.sunLight.target);
+    Object.assign(this.sunLight.shadow.camera, {left:-d, right:d, top:d, bottom:-d, far:d*5});
+    this.sunLight.shadow.camera.updateProjectionMatrix();
+    this.setOverview(true);
+  }
+
+  public setOverview(enabled: boolean): void {
+    this.overview = enabled;
+    this.controller.exitLock();
+    this.orbit.enabled = enabled;
+    this.setCeilingVisible(!enabled);
+    if (enabled) {
+      const b = this.floorPlanData.bounds;
+      const center = new THREE.Vector3((b.minX+b.maxX)/2, .6, (b.minY+b.maxY)/2);
+      const radius = Math.hypot(b.maxX-b.minX, b.maxY-b.minY, 3.2)/2;
+      const fov = 2*Math.atan(Math.tan(THREE.MathUtils.degToRad(this.camera.fov)/2)*Math.min(1,this.camera.aspect));
+      const distance = radius / Math.sin(fov/2) * 1.22;
+      this.camera.far = Math.max(100, distance*6);
+      this.camera.updateProjectionMatrix();
+      this.orbit.target.copy(center);
+      this.camera.position.copy(center).add(new THREE.Vector3(.5, .85, 1).normalize().multiplyScalar(distance));
+      this.orbit.minDistance = radius*.5;
+      this.orbit.maxDistance = distance*3;
+      this.orbit.update();
+    } else {
+      this.resetPlayerPosition();
+    }
   }
 
   public toggleCeiling(): boolean {
@@ -190,7 +230,8 @@ export class SceneManager {
       // Container not laid out (or hidden) yet: drawing now would target a
       // zero-size framebuffer and spam GL_INVALID_FRAMEBUFFER_OPERATION.
       if (this.container.clientWidth === 0 || this.container.clientHeight === 0) return;
-      this.controller.update(delta);
+      if (this.overview) this.orbit.update();
+      else this.controller.update(delta);
       this.renderer.render(this.scene, this.camera);
     };
 
@@ -212,6 +253,8 @@ export class SceneManager {
       this.resizeObserver = null;
     }
     this.controller.dispose();
+    this.orbit.dispose();
+    this.floorPlanRenderer.dispose();
     this.renderer.dispose();
     // dispose() frees GPU resources but keeps the WebGL context alive. Browsers cap
     // live contexts (~16 in Chrome) and then block the page, which StrictMode

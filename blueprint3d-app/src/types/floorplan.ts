@@ -19,6 +19,7 @@ export interface DoorData {
   height?: number;    // opening height (e.g. 2.1m)
   orientation: 'horizontal' | 'vertical';
   name?: string;
+  angle?: number;
   isOpen?: boolean;
 }
 
@@ -59,7 +60,23 @@ export interface RoomData {
   code?: string;
 }
 
+export interface PlanPolygon {
+  outer: [number, number][];
+  holes: [number, number][][];
+}
+
+export interface BuildingShell {
+  layers: { bottom: number; top: number; polygons: PlanPolygon[] }[];
+  collision: PlanPolygon[];
+  footprint: PlanPolygon[];
+  spawn: { x: number; y: number };
+}
+
 export interface FloorPlanData {
+  source?: 'detected';
+  importWarnings?: string[];
+  reconstruction?: 'automatic' | 'traced';
+  shell?: BuildingShell;
   name: string;
   description: string;
   unit: 'meters';

@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { FloorPlanData, RoomData } from '../types/floorplan';
+import { polygonSlab } from './PolygonGeometry';
 import { WallGenerator } from './WallGenerator';
 import { DoorGenerator } from './DoorGenerator';
 import { WindowGenerator } from './WindowGenerator';
@@ -160,6 +161,8 @@ export class FloorPlanRenderer {
   public build(): void {
     // 1. Clear previous collision obstacles
     this.collisionSystem.clear();
+    const b = this.floorPlanData.bounds;
+    this.collisionSystem.setBounds(b.minX, b.minY, b.maxX, b.maxY);
 
     // 2. Build Floor
     this.buildFloors();
@@ -177,11 +180,29 @@ export class FloorPlanRenderer {
     this.buildCeiling();
 
     // 7. Build Architectural Minimalist Furniture & Staging
-    this.buildArchitecturalStaging();
+    if (this.floorPlanData.source !== 'detected') this.buildArchitecturalStaging();
   }
 
   private buildFloors(): void {
-    const { bounds, rooms } = this.floorPlanData;
+    const { bounds, rooms, shell } = this.floorPlanData;
+    if (shell) {
+      const material = new THREE.MeshStandardMaterial({color: 0xded9d2, roughness: .8});
+      for (const polygon of shell.footprint) {
+        const floor = new THREE.Mesh(polygonSlab(polygon, -.16, .16), material);
+        floor.name = 'footprint-floor';
+        floor.receiveShadow = true;
+        this.rootGroup.add(floor);
+      }
+      // Use actual room polygons: concave rooms must never become overlapping rectangles.
+      for (const room of rooms) {
+        if (!room.polygon || room.polygon.length < 3) continue;
+        const floor = new THREE.Mesh(polygonSlab({outer: room.polygon, holes: []}, 0, .008), material);
+        floor.name = `floor-${room.id}`;
+        floor.receiveShadow = true;
+        this.rootGroup.add(floor);
+      }
+      return;
+    }
     const width = bounds.maxX - bounds.minX;
     const depth = bounds.maxY - bounds.minY;
 
@@ -276,7 +297,30 @@ export class FloorPlanRenderer {
   }
 
   private buildWalls(): void {
-    const { walls, doors, windows, defaultWallHeight } = this.floorPlanData;
+    const { walls, doors, windows, defaultWallHeight, shell } = this.floorPlanData;
+    if (shell) {
+      const group = new THREE.Group();
+      group.name = 'connected-wall-shell';
+      const material = new THREE.MeshStandardMaterial({color: 0xf1efe9, roughness: .85});
+      for (const layer of shell.layers) {
+        for (const polygon of layer.polygons) {
+          const mesh = new THREE.Mesh(polygonSlab(polygon, layer.bottom, layer.top-layer.bottom), material);
+          mesh.castShadow = true;
+          mesh.receiveShadow = true;
+          group.add(mesh);
+        }
+      }
+      for (const polygon of shell.collision) {
+        for (const ring of [polygon.outer, ...polygon.holes]) {
+          ring.forEach(([x, y], i) => {
+            const next = ring[(i+1)%ring.length];
+            this.collisionSystem.addObstacle(x, y, next[0], next[1], .001);
+          });
+        }
+      }
+      this.rootGroup.add(group);
+      return;
+    }
 
     const wallsGroup = new THREE.Group();
     wallsGroup.name = 'walls-collection';
@@ -322,7 +366,17 @@ export class FloorPlanRenderer {
   }
 
   private buildCeiling(): void {
-    const { bounds, defaultWallHeight, rooms } = this.floorPlanData;
+    const { bounds, defaultWallHeight, rooms, shell } = this.floorPlanData;
+    if (shell) {
+      const material = new THREE.MeshStandardMaterial({color: 0xfcfbfa, roughness: .85});
+      for (const polygon of shell.footprint) {
+        const roof = new THREE.Mesh(polygonSlab(polygon, defaultWallHeight, .15), material);
+        roof.castShadow = true;
+        roof.receiveShadow = true;
+        this.ceilingGroup.add(roof);
+      }
+      return;
+    }
     const width = bounds.maxX - bounds.minX;
     const depth = bounds.maxY - bounds.minY;
     const thickness = 0.15;
@@ -372,6 +426,26 @@ export class FloorPlanRenderer {
       roomLight.castShadow = false; // Point light shadows disabled for performance
       this.ceilingGroup.add(roomLight);
     }
+  }
+
+  public dispose(): void {
+    const geometries = new Set<THREE.BufferGeometry>();
+    const materials = new Set<THREE.Material>();
+    const textures = new Set<THREE.Texture>();
+    this.rootGroup.traverse(object => {
+      if (!(object instanceof THREE.Mesh)) return;
+      geometries.add(object.geometry);
+      for (const material of Array.isArray(object.material) ? object.material : [object.material]) {
+        materials.add(material);
+        for (const value of Object.values(material)) if (value instanceof THREE.Texture) textures.add(value);
+      }
+    });
+    for (const texture of [this.woodTexture, this.tileTexture, this.marbleTexture, this.slateTexture]) {
+      if (texture) textures.add(texture);
+    }
+    geometries.forEach(g => g.dispose());
+    materials.forEach(m => m.dispose());
+    textures.forEach(t => t.dispose());
   }
 
   public setCeilingVisible(visible: boolean): void {

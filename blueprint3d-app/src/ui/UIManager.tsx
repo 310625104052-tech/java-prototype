@@ -9,6 +9,8 @@ import { LocationSystem } from '../navigation/LocationSystem';
 interface UIManagerProps {
   floorPlan: FloorPlanData;
   hasModel: boolean;
+  isOverview: boolean;
+  onOverview: () => void;
   modelFileName: string;
   isLocked: boolean;
   lockError?: string | null;
@@ -35,6 +37,8 @@ const CONTROL_HINTS: { keys: string; label: string }[] = [
 export function UIManager({
   floorPlan,
   hasModel,
+  isOverview,
+  onOverview,
   modelFileName,
   isLocked,
   lockError,
@@ -50,13 +54,25 @@ export function UIManager({
 
   const locationInfo = LocationSystem.getLocationInfo(playerPos.x, playerPos.z, playerPos.yaw, floorPlan);
 
-  const showReadyCard = hasModel && !isLocked && !showDetailedMap && !showJsonInspector;
+  const showReadyCard = hasModel && !isOverview && !isLocked && !showDetailedMap && !showJsonInspector;
 
   return (
     <>
       {/* 1. Start screen: upload is the only thing on screen until a model exists */}
       {!hasModel && <StartScreen onPlanReady={onPlanReady} />}
 
+      {hasModel && isOverview && (
+        <>
+          <div className="absolute top-4 left-4 right-4 z-20 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-slate-700 bg-slate-900/95 p-4 text-white shadow-xl">
+            <div><p className="text-sm font-semibold">{modelFileName}</p><p className="mt-1 text-xs text-slate-400">3D overview | Drag to rotate | Scroll to zoom</p></div>
+            <div className="flex gap-3 text-sm">
+              <button className="rounded-lg bg-sky-500 px-4 py-2 font-semibold text-slate-950" onClick={onEnterFirstPerson}>Walk through</button>
+              <button className="rounded-lg bg-slate-700 px-3 py-2" onClick={onNewUpload}>Upload another</button>
+            </div>
+          </div>
+          <div className="pointer-events-none absolute bottom-4 left-1/2 -translate-x-1/2 rounded-full bg-slate-900/90 px-4 py-2 text-xs text-slate-300">{floorPlan.reconstruction==='traced' ? 'Traced layout | Scale set manually' : `${floorPlan.rooms.length} rooms | Roof hidden for inspection | Estimated scale${floorPlan.importWarnings?.length ? ' | Approximate: reviewed import' : ''}`}</div>
+        </>
+      )}
       {/* 2. Model ready / paused: one card, one primary action */}
       {showReadyCard && (
         <div className="absolute inset-0 z-30 flex items-center justify-center bg-slate-950/50 backdrop-blur-[2px]">
@@ -92,6 +108,7 @@ export function UIManager({
             </button>
             <p className="mt-2 text-[11px] text-slate-500">Controls appear at the bottom once you start.</p>
 
+            <button className="mt-4 text-sm text-sky-400" onClick={onOverview}>3D overview</button>
             <div className="mt-4 flex items-center justify-center gap-4 text-xs">
               <button
                 type="button"

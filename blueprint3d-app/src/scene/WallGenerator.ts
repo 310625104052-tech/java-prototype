@@ -72,7 +72,7 @@ export class WallGenerator {
 
     // Check doors
     for (const door of doors) {
-      if (door.wallId === wall.id || this.isPointOnSegment(door.x, door.y, wall.x1, wall.y1, wall.x2, wall.y2, 0.4)) {
+      if (door.wallId ? door.wallId === wall.id : ((door.orientation === 'vertical') === (Math.abs(dz) > Math.abs(dx)) && this.isPointOnSegment(door.x, door.y, wall.x1, wall.y1, wall.x2, wall.y2, thickness / 2))) {
         const s = (door.x - wall.x1) * ux + (door.y - wall.y1) * uz;
         const halfW = door.width / 2;
         intervals.push({
@@ -87,7 +87,7 @@ export class WallGenerator {
 
     // Check windows
     for (const win of windows) {
-      if (win.wallId === wall.id || this.isPointOnSegment(win.x, win.y, wall.x1, wall.y1, wall.x2, wall.y2, 0.4)) {
+      if (win.wallId ? win.wallId === wall.id : ((win.orientation === 'vertical') === (Math.abs(dz) > Math.abs(dx)) && this.isPointOnSegment(win.x, win.y, wall.x1, wall.y1, wall.x2, wall.y2, thickness / 2))) {
         const s = (win.x - wall.x1) * ux + (win.y - wall.y1) * uz;
         const halfW = win.width / 2;
         intervals.push({
@@ -98,6 +98,10 @@ export class WallGenerator {
           data: win,
         });
       }
+    }
+
+    for (let i = intervals.length - 1; i >= 0; i--) {
+      if (intervals[i].sEnd <= intervals[i].sStart) intervals.splice(i, 1);
     }
 
     // Sort intervals along wall parameter s

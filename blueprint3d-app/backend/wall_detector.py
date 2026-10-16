@@ -2,6 +2,12 @@ import cv2
 import numpy as np
 import base64
 import math
+try:
+    from .structural_evidence import prepare_structure, exterior
+    from .shell_geometry import build_shell
+except ImportError:
+    from structural_evidence import prepare_structure, exterior
+    from shell_geometry import build_shell
 from typing import Dict, Any, List, Tuple, Optional
 
 # ==============================================================================
@@ -85,7 +91,10 @@ def detect_walls_from_image_bytes(image_bytes: bytes) -> Dict[str, Any]:
     """
     # 1. Image Decoding
     np_arr = np.frombuffer(image_bytes, np.uint8)
-    img = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+    try:
+        img = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+    except cv2.error:
+        img = None
 
     if img is None:
         return {
@@ -93,63 +102,24 @@ def detect_walls_from_image_bytes(image_bytes: bytes) -> Dict[str, Any]:
             "error": "Failed to decode blueprint image. Supported formats: PNG, JPEG, JPG."
         }
 
+    try:
+        img, raw_fg, structural_wall_mask, topology_mask, opening_candidates, stroke_px, import_info = prepare_structure(img)
+    except ValueError as exc:
+        return {"success": False, "error": str(exc)}
     h_img, w_img = img.shape[:2]
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    clean_fg = raw_fg
+    dist_transform = cv2.distanceTransform(topology_mask, cv2.DIST_L2, 5)
+    outside_floor = exterior(topology_mask > 0)
+    near_outside = cv2.dilate(outside_floor.astype(np.uint8),
+                              np.ones((stroke_px * 2 + 3, stroke_px * 2 + 3), np.uint8))
 
-    # 2. Illumination & Blueprint Type Detection
-    # Determine if this is a classic Navy Blue blueprint or light paper CAD
-    mean_val = float(np.mean(gray))
-    corner_samples = [
-        gray[0:15, 0:15],
-        gray[0:15, -15:],
-        gray[-15:, 0:15],
-        gray[-15:, -15:]
-    ]
-    corner_mean = float(np.mean([np.mean(c) for c in corner_samples if c.size > 0]))
-    is_dark_blueprint = corner_mean < 90 or mean_val < 100
-
-    if is_dark_blueprint:
-        # In dark blueprint: bright lines are the drawing ink
-        # Enhance contrast
-        clahe = cv2.createCLAHE(clipLimit=2.5, tileGridSize=(8, 8))
-        norm_gray = clahe.apply(gray)
-        _, raw_fg = cv2.threshold(norm_gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-    else:
-        # In light paper: dark lines are the drawing ink
-        blurred = cv2.GaussianBlur(gray, (3, 3), 0)
-        _, raw_fg_inv = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
-        raw_fg = raw_fg_inv
-
-    # Denoise small salt-and-pepper artifacts
-    clean_fg = cv2.medianBlur(raw_fg, 3)
-
-    # 3. Structural Wall Region Segmentation via Distance Transform
-    # Real walls in floor plans have significant solid thickness (>= 5px).
-    # Thin lines (gridlines, dimension marks, room text) have distance transform <= 2.0.
-    dist_transform = cv2.distanceTransform(clean_fg, cv2.DIST_L2, 5)
-
-    min_core_half = float(DETECTION_CONFIG["MIN_WALL_CORE_HALF_THICK"])
-    wall_core = (dist_transform >= min_core_half).astype(np.uint8) * 255
-
-    # Filter out small noise blobs from text/symbols using connected components
-    num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(wall_core)
-    filtered_core = np.zeros_like(wall_core)
-    for i in range(1, num_labels):
-        area = stats[i, cv2.CC_STAT_AREA]
-        # Keep components with sufficient area to form structural walls
-        if area >= 30:
-            filtered_core[labels == i] = 255
-
-    # Reconstruct full wall width by dilating core back to match physical wall boundaries
-    dilate_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
-    structural_wall_mask = cv2.dilate(filtered_core, dilate_kernel)
-    # Mask by clean foreground so we don't bleed into empty space
-    structural_wall_mask = cv2.bitwise_and(structural_wall_mask, clean_fg)
-
-    # Bridge small gaps along wall centerlines with directional closing
-    close_h = cv2.morphologyEx(structural_wall_mask, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_RECT, (9, 1)))
-    close_v = cv2.morphologyEx(structural_wall_mask, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_RECT, (1, 9)))
-    structural_wall_mask = cv2.bitwise_or(close_h, close_v)
+    def is_exterior_line(x1, y1, x2, y2):
+        samples = []
+        for t in np.linspace(.15, .85, 5):
+            x = int(np.clip(x1 + t * (x2-x1), 0, w_img-1))
+            y = int(np.clip(y1 + t * (y2-y1), 0, h_img-1))
+            samples.append(bool(near_outside[y,x]))
+        return sum(samples) >= 3
 
     # 4. Extract Wall Polygons & Contours
     contours, hierarchy = cv2.findContours(structural_wall_mask, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_SIMPLE)
@@ -182,7 +152,7 @@ def detect_walls_from_image_bytes(image_bytes: bytes) -> Dict[str, Any]:
         region_idx += 1
 
     # 5. Extract Centerlines & Wall Thickness via Medial Axis / Skeleton
-    skeleton = _morphological_skeleton(structural_wall_mask)
+    skeleton = _morphological_skeleton(topology_mask)
 
     # Vectorize skeleton into line segments
     # Use HoughLinesP on skeleton (which is strictly 1-pixel wide) to extract exact linear centerlines
@@ -192,7 +162,7 @@ def detect_walls_from_image_bytes(image_bytes: bytes) -> Dict[str, Any]:
         theta=np.pi / 180,
         threshold=25,
         minLineLength=int(DETECTION_CONFIG["MIN_WALL_LENGTH_PX"]),
-        maxLineGap=20
+        maxLineGap=max(2, round(stroke_px * .5))
     )
 
     detected_centerlines: List[Dict[str, Any]] = []
@@ -233,7 +203,7 @@ def detect_walls_from_image_bytes(image_bytes: bytes) -> Dict[str, Any]:
     # 6. Collinear Merging of Centerlines to Prevent Fragmentation
     merged_walls: List[Dict[str, Any]] = []
     collinear_dist_tol = float(DETECTION_CONFIG["COLLINEAR_MERGE_DIST_PX"])
-    collinear_gap_tol = float(DETECTION_CONFIG["COLLINEAR_MERGE_GAP_PX"])
+    collinear_gap_tol = max(2., stroke_px * .75)
 
     # Separate horizontal, vertical, diagonal
     horiz_lines = [l for l in detected_centerlines if l["orientation"] == "horizontal"]
@@ -300,7 +270,7 @@ def detect_walls_from_image_bytes(image_bytes: bytes) -> Dict[str, Any]:
     for m in merged_h:
         length = m["x_max"] - m["x_min"]
         if length >= float(DETECTION_CONFIG["MIN_WALL_LENGTH_PX"]):
-            is_ext = (m["y1"] <= 80 or m["y1"] >= (h_img - 80) or m["thickness"] >= 14.0)
+            is_ext = is_exterior_line(m["x_min"], m["y1"], m["x_max"], m["y1"])
             merged_walls.append({
                 "id": f"wall-{wall_id}",
                 "x1": round(m["x_min"], 1),
@@ -320,7 +290,7 @@ def detect_walls_from_image_bytes(image_bytes: bytes) -> Dict[str, Any]:
     for m in merged_v:
         length = m["y_max"] - m["y_min"]
         if length >= float(DETECTION_CONFIG["MIN_WALL_LENGTH_PX"]):
-            is_ext = (m["x1"] <= 80 or m["x1"] >= (w_img - 80) or m["thickness"] >= 14.0)
+            is_ext = is_exterior_line(m["x1"], m["y_min"], m["x1"], m["y_max"])
             merged_walls.append({
                 "id": f"wall-{wall_id}",
                 "x1": round(m["x1"], 1),
@@ -355,96 +325,45 @@ def detect_walls_from_image_bytes(image_bytes: bytes) -> Dict[str, Any]:
             })
             wall_id += 1
 
-    # 7. Openings Detection (Doors & Windows)
-    # Find gaps along wall lines where the raw image shows an opening
-    detected_openings: List[Dict[str, Any]] = []
-    opening_id = 1
-
-    # Detect door swing arcs using circle / arc detection heuristics in the foreground
-    for wall in merged_walls:
-        w_x1, w_y1 = wall["x1"], wall["y1"]
-        w_x2, w_y2 = wall["x2"], wall["y2"]
-        ori = wall["orientation"]
-
-        if ori == "horizontal":
-            y = int(w_y1)
-            x_start = int(min(w_x1, w_x2))
-            x_end = int(max(w_x1, w_x2))
-
-            # Scan along the wall for zero-fill gaps in raw_fg
-            in_gap = False
-            gap_start = 0
-            for x in range(x_start + 10, x_end - 10):
-                # Check strip across wall
-                strip = raw_fg[max(0, y - 4):min(h_img, y + 5), x]
-                is_gap = (np.count_nonzero(strip) == 0)
-
-                if is_gap and not in_gap:
-                    in_gap = True
-                    gap_start = x
-                elif not is_gap and in_gap:
-                    in_gap = False
-                    gap_w = x - gap_start
-                    if 20 <= gap_w <= 95:
-                        center_x = (gap_start + x) / 2.0
-                        is_ext = wall["wallType"] == "exterior"
-                        is_double = gap_w >= 50
-                        op_type = "window" if is_ext else "door"
-
-                        detected_openings.append({
-                            "id": f"opening-{opening_id}",
-                            "type": op_type,
-                            "subType": "double_door" if (op_type == "door" and is_double) else ("single_door" if op_type == "door" else "ribbon_window"),
-                            "x": round(center_x, 1),
-                            "y": round(float(y), 1),
-                            "width": round(float(gap_w), 1),
-                            "height": 2.3 if op_type == "door" else 1.5,
-                            "sillHeight": 0.0 if op_type == "door" else 0.9,
-                            "orientation": "horizontal",
-                            "parentWallId": wall["id"],
-                            "confidence": 0.91,
-                        })
-                        wall["openings"].append(f"opening-{opening_id}")
-                        opening_id += 1
-
-        elif ori == "vertical":
-            x = int(w_x1)
-            y_start = int(min(w_y1, w_y2))
-            y_end = int(max(w_y1, w_y2))
-
-            in_gap = False
-            gap_start = 0
-            for y in range(y_start + 10, y_end - 10):
-                strip = raw_fg[y, max(0, x - 4):min(w_img, x + 5)]
-                is_gap = (np.count_nonzero(strip) == 0)
-
-                if is_gap and not in_gap:
-                    in_gap = True
-                    gap_start = y
-                elif not is_gap and in_gap:
-                    in_gap = False
-                    gap_h = y - gap_start
-                    if 20 <= gap_h <= 95:
-                        center_y = (gap_start + y) / 2.0
-                        is_ext = wall["wallType"] == "exterior"
-                        is_double = gap_h >= 50
-                        op_type = "window" if is_ext else "door"
-
-                        detected_openings.append({
-                            "id": f"opening-{opening_id}",
-                            "type": op_type,
-                            "subType": "double_door" if (op_type == "door" and is_double) else ("single_door" if op_type == "door" else "ribbon_window"),
-                            "x": round(float(x), 1),
-                            "y": round(center_y, 1),
-                            "width": round(float(gap_h), 1),
-                            "height": 2.3 if op_type == "door" else 1.5,
-                            "sillHeight": 0.0 if op_type == "door" else 0.9,
-                            "orientation": "vertical",
-                            "parentWallId": wall["id"],
-                            "confidence": 0.91,
-                        })
-                        wall["openings"].append(f"opening-{opening_id}")
-                        opening_id += 1
+    # 7. Openings come from structural gaps and enclosed-space topology.
+    # Thin frame/arc pixels do not close a doorway, and wall thickness does not
+    # decide whether a partition is exterior.
+    detected_openings = []
+    door_widths = [op["width"] for op in opening_candidates if op["type"] == "door"]
+    typical_door = float(np.median(door_widths)) if door_widths else 0.
+    for candidate in opening_candidates:
+        op = dict(candidate)
+        x, y, width = op["x"], op["y"], op["width"]
+        vertical = op["orientation"] == "vertical"
+        hosts = []
+        for wall in merged_walls:
+            if wall["orientation"] != op["orientation"]:
+                continue
+            lo, hi = sorted((wall["y1"],wall["y2"]) if vertical else (wall["x1"],wall["x2"]))
+            along, across = (y,abs(x-wall["x1"])) if vertical else (x,abs(y-wall["y1"]))
+            if lo <= along-width/2+stroke_px and hi >= along+width/2-stroke_px and across <= stroke_px:
+                hosts.append((across,wall))
+        if hosts:
+            host = min(hosts,key=lambda pair:pair[0])[1]
+        else:
+            # A short pier can miss Hough's length floor. Give this observed gap
+            # a host, so the renderer emits its lintel/glazing instead of sealing it.
+            host = {"id":f"wall-{wall_id}", "x1":x if vertical else x-width/2,
+                    "y1":y-width/2 if vertical else y, "x2":x if vertical else x+width/2,
+                    "y2":y+width/2 if vertical else y, "length":width,
+                    "thickness":float(stroke_px),"height":3.2,
+                    "wallType":"exterior" if op["type"]=="window" else "interior",
+                    "orientation":op["orientation"],"confidence":.75,"openings":[]}
+            merged_walls.append(host)
+            wall_id += 1
+        op_id=f"opening-{len(detected_openings)+1}"
+        is_door=op["type"]=="door"
+        double=is_door and typical_door>0 and width>typical_door*1.65
+        op.update(id=op_id, wallId=host["id"], parentWallId=host["id"],
+                  subType=("double_door" if double else "single_door") if is_door else "exterior_window",
+                  height=2.3 if is_door else 1.5, sillHeight=0. if is_door else .9, confidence=.75)
+        host["openings"].append(op_id)
+        detected_openings.append(op)
 
     # 8. Scale Calibration
     # Calibrate using detected doors (standard single door = 0.90m, double door = 1.80m)
@@ -481,14 +400,7 @@ def detect_walls_from_image_bytes(image_bytes: bytes) -> Dict[str, Any]:
     # Invert structural wall mask to find enclosed spaces
     # Seal every detected door/window gap first. Otherwise any opening leaks the
     # interior into the exterior (or into its neighbours) and no room is found.
-    sealed_mask = structural_wall_mask.copy()
-    seal_width = max(2, int(DETECTION_CONFIG["DEFAULT_WALL_THICKNESS_PX"]))
-    for op in detected_openings:
-        ox, oy, half_w = int(op["x"]), int(op["y"]), int(op["width"] // 2) + 1
-        if op["orientation"] == "horizontal":
-            cv2.line(sealed_mask, (ox - half_w, oy), (ox + half_w, oy), 255, seal_width)
-        else:
-            cv2.line(sealed_mask, (ox, oy - half_w), (ox, oy + half_w), 255, seal_width)
+    sealed_mask = topology_mask.copy()
     void_mask = cv2.bitwise_not(sealed_mask)
     num_rooms, room_labels, room_stats, room_centroids = cv2.connectedComponentsWithStats(void_mask)
 
@@ -502,10 +414,10 @@ def detect_walls_from_image_bytes(image_bytes: bytes) -> Dict[str, Any]:
         room_labels[:, 0],
         room_labels[:, -1]
     ])
-    exterior_label = int(np.bincount(border_pixels).argmax())
+    exterior_labels = set(np.unique(border_pixels).tolist())
 
     for r_idx in range(1, num_rooms):
-        if r_idx == exterior_label:
+        if r_idx in exterior_labels:
             continue
 
         area_px = int(room_stats[r_idx, cv2.CC_STAT_AREA])
@@ -521,37 +433,11 @@ def detect_walls_from_image_bytes(image_bytes: bytes) -> Dict[str, Any]:
         area_m2 = round(area_px / (pixels_per_meter ** 2), 1)
         aspect = max(rw, rh) / max(1, min(rw, rh))
 
-        # College Building Room Classification
-        if aspect >= 2.8 or (max(rw, rh) / pixels_per_meter) >= 12.0:
-            room_name = f"Main Arterial Corridor"
-            room_type = "corridor"
-            floor_type = "slate"
-            color = "#475569"
-        elif area_m2 >= 70:
-            room_name = f"Lecture Hall {200 + room_id}"
-            room_type = "lecture_hall"
-            floor_type = "hardwood"
-            color = "#3b82f6"
-        elif area_m2 >= 45:
-            room_name = f"AI & Robotics Lab {200 + room_id}"
-            room_type = "laboratory"
-            floor_type = "ceramic"
-            color = "#6366f1"
-        elif area_m2 >= 25:
-            room_name = f"Electronics Lab {200 + room_id}"
-            room_type = "classroom"
-            floor_type = "ceramic"
-            color = "#10b981"
-        elif area_m2 >= 14:
-            room_name = f"Faculty Office {200 + room_id}"
-            room_type = "office"
-            floor_type = "carpet"
-            color = "#ec4899"
-        else:
-            room_name = f"Stairwell / Restroom Core"
-            room_type = "service"
-            floor_type = "marble"
-            color = "#f59e0b"
+        # Room use cannot be inferred from area or aspect alone.
+        room_name = f"Room {room_id}"
+        room_type = "general"
+        floor_type = "ceramic"
+        color = "#ded9d2"
 
         # Room boundary polygon
         r_mask = (room_labels == r_idx).astype(np.uint8) * 255
@@ -575,6 +461,9 @@ def detect_walls_from_image_bytes(image_bytes: bytes) -> Dict[str, Any]:
             "polygon": poly,
         })
         room_id += 1
+
+    if not merged_walls or not detected_rooms:
+        return {"success":False,"error":"No reliable walls and enclosed rooms were detected. Use a clear full-size structural floor plan."}
 
     # 10. Generate 8 Visual Debug Layers for Frontend Test Mode & Approval
     # Layer 1: Original image
@@ -681,6 +570,7 @@ def detect_walls_from_image_bytes(image_bytes: bytes) -> Dict[str, Any]:
 
     return {
         "success": True,
+        "import_info": import_info,
         "image_width": w_img,
         "image_height": h_img,
         "walls": merged_walls,
@@ -688,6 +578,7 @@ def detect_walls_from_image_bytes(image_bytes: bytes) -> Dict[str, Any]:
         "wall_regions": wall_regions,
         "openings": detected_openings,
         "rooms": detected_rooms,
+        "shell": build_shell(topology_mask, detected_openings, stroke_px),
         "scale": scale_data,
         "pipeline_counts": {
             "wall_regions": len(wall_regions),
