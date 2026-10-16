@@ -74,3 +74,17 @@ and manual tracing. Optional JSON-response paths passed to the last command chec
 saved real detections too.
 
 DXF implementation follows the [ezdxf decomposition documentation](https://ezdxf.readthedocs.io/en/stable/disassemble.html).
+
+## Deployment
+
+Pushing to `main` redeploys both halves automatically.
+
+| Part | Host | URL | Notes |
+|---|---|---|---|
+| Frontend (Vite) | Vercel project `blueprint3d`, root `blueprint3d-app` | https://blueprint3d-eta.vercel.app | `VITE_API_URL` points at the backend |
+| Backend (FastAPI) | Render web service `blueprint3d-api` (free plan) | https://blueprint3d-api.onrender.com | `ALLOWED_ORIGINS` lists the frontend URLs |
+
+- The backend's free plan sleeps when idle, so the first upload after a quiet period can take 30-60 s.
+- To allow a new frontend URL, add it to `ALLOWED_ORIGINS` (comma-separated) in the Render dashboard.
+- The Vercel project's root directory is `blueprint3d-app`, so run any manual `vercel deploy` from the repository root, not from this folder.
+- Do not add a `vercel.json` with `services`: it would also try to host the backend on Vercel, whose 4.5 MB request limit rejects larger plan uploads.
