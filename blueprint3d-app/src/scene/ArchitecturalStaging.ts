@@ -396,6 +396,14 @@ export class ArchitecturalStaging {
     this.parentGroup.add(group);
   }
 
+  /** Check if a door exists near coordinates to prevent furniture blocking doorways. */
+  private hasDoorNear(x: number, z: number, radius: number = 1.5): boolean {
+    for (const door of this.floorPlan.doors) {
+      if (Math.hypot(door.x - x, door.y - z) < radius) return true;
+    }
+    return false;
+  }
+
   /**
    * Seminar / Conference Room: conference table, 8-10 executive chairs, wall display.
    */
@@ -410,11 +418,38 @@ export class ArchitecturalStaging {
     table.castShadow = true;
     group.add(table);
 
-    // Wall Conference Display
-    const displayGeom = new THREE.BoxGeometry(2.4, 1.3, 0.05);
-    const display = new THREE.Mesh(displayGeom, this.darkPlasticMat);
-    display.position.set(room.x + room.width / 2, 1.8, room.y + 0.1);
-    group.add(display);
+    // Wall Conference Display:
+    // Check if the North wall has a door opening (e.g. at room.x + room.width / 2).
+    // If so, mount the display cleanly on the solid West wall facing into the room.
+    const displayGroup = new THREE.Group();
+    displayGroup.name = `seminar-display-${room.id}`;
+    const frameGeom = new THREE.BoxGeometry(0.04, 1.25, 2.2);
+    const frameMesh = new THREE.Mesh(frameGeom, this.darkPlasticMat);
+    displayGroup.add(frameMesh);
+
+    // Backlit conference presentation panel
+    const screenMat = new THREE.MeshStandardMaterial({
+      color: 0x142330,
+      emissive: 0x1947e5,
+      emissiveIntensity: 0.12,
+      roughness: 0.3,
+      metalness: 0.7,
+    });
+    const screenGeom = new THREE.BoxGeometry(0.015, 1.15, 2.1);
+    const screenMesh = new THREE.Mesh(screenGeom, screenMat);
+    screenMesh.position.set(0.02, 0, 0);
+    displayGroup.add(screenMesh);
+
+    const northCenterDoor = this.hasDoorNear(room.x + room.width / 2, room.y, 1.4);
+    if (northCenterDoor) {
+      // Mount on West interior partition wall
+      displayGroup.position.set(room.x + this.floorPlan.defaultInteriorThickness / 2 + 0.03, 1.75, room.y + room.height / 2);
+    } else {
+      // Mount on North wall rotated
+      displayGroup.position.set(room.x + room.width / 2, 1.75, room.y + this.floorPlan.defaultInteriorThickness / 2 + 0.03);
+      displayGroup.rotation.y = -Math.PI / 2;
+    }
+    group.add(displayGroup);
 
     // Chairs around table
     for (let i = 0; i < 4; i++) {

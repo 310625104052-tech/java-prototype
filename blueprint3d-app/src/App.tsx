@@ -1,21 +1,23 @@
-import { useEffect, useRef, useState } from 'react';
-import { SceneManager } from './scene/SceneManager';
+import { useEffect, useRef, useState, useCallback } from 'react';
+import type { SceneManager } from './scene/SceneManager';
 import { sampleCollegeFloorPlan } from './data/sampleCollegeFloorPlan';
 import { UIManager } from './ui/UIManager';
 import { FloorPlanData } from './types/floorplan';
+import { LocationSystem } from './navigation/LocationSystem';
+import { Loader2 } from 'lucide-react';
 
 export default function App() {
   const containerRef = useRef<HTMLDivElement>(null);
   const sceneManagerRef = useRef<SceneManager | null>(null);
 
-  // The scene needs a plan to boot with; it stays hidden behind the start screen
-  // until the user uploads their own.
   const [currentFloorPlan, setCurrentFloorPlan] = useState<FloorPlanData>(sampleCollegeFloorPlan);
   const [hasModel, setHasModel] = useState(false);
   const [isOverview, setIsOverview] = useState(true);
+  const [isCeilingVisible, setIsCeilingVisible] = useState(false);
   const [modelFileName, setModelFileName] = useState('');
   const [showDetailedMap, setShowDetailedMap] = useState(false);
   const [isLocked, setIsLocked] = useState(false);
+  const [sceneLoading, setSceneLoading] = useState(false);
   const [graphicsError, setGraphicsError] = useState(false);
   const [lockError, setLockError] = useState<string | null>(null);
   const [playerPos, setPlayerPos] = useState({
@@ -23,67 +25,145 @@ export default function App() {
     z: sampleCollegeFloorPlan.spawnPoint.y,
     yaw: sampleCollegeFloorPlan.spawnPoint.yaw || 0,
   });
+  const playerPosRef = useRef({
+    x: sampleCollegeFloorPlan.spawnPoint.x,
+    z: sampleCollegeFloorPlan.spawnPoint.y,
+    yaw: sampleCollegeFloorPlan.spawnPoint.yaw || 0,
+  });
 
   useEffect(() => {
-    if (!containerRef.current) return;
+    if (!hasModel || !containerRef.current) return;
 
-    let manager: SceneManager;
-    try {
-      manager = new SceneManager(containerRef.current, sampleCollegeFloorPlan);
-    } catch (err) {
-      console.error('Could not start the 3D renderer:', err);
-      setGraphicsError(true);
-      return;
-    }
-    setGraphicsError(false);
-    sceneManagerRef.current = manager;
+    let cancelled = false;
+    let manager: SceneManager | undefined;
+    let lastRoomName = '';
+    let lastFacingText = '';
+    let lastCoordsText = '';
 
-    manager.controller.setOnLockChange((locked) => {
-      setIsLocked(locked);
-      if (locked) setLockError(null);
-    });
+    // The upload/review screens need neither the Three.js bundle nor a WebGL context.
+    void import('./scene/SceneManager')
+      .then(({ SceneManager }) => {
+        if (cancelled || !containerRef.current) return;
+        manager = new SceneManager(containerRef.current, currentFloorPlan);
+        sceneManagerRef.current = manager;
 
-    manager.controller.setOnLockError(setLockError);
+        manager.controller.setOnLockChange((locked) => {
+          setIsLocked(locked);
+          if (!locked) {
+            // When exiting lock / pausing, sync latest position to React state for pause dialog & map
+            setPlayerPos({ ...playerPosRef.current });
+          }
+          if (locked) setLockError(null);
+        });
+        manager.controller.setOnLockError(setLockError);
 
-    manager.controller.setOnPositionUpdate((x, z, yaw) => {
-      setPlayerPos({ x, z, yaw });
-    });
+        // Blazing-fast direct DOM updates: zero React re-renders while walking, guaranteeing fixed 60 FPS
+        manager.controller.setOnPositionUpdate((x, z, yaw) => {
+          playerPosRef.current = { x, z, yaw };
 
-    manager.controller.setOnToggleCeiling(() => {
-      manager.toggleCeiling();
-    });
+          const loc = LocationSystem.getLocationInfo(x, z, yaw, currentFloorPlan);
 
-    manager.controller.setOnResetPlayer(() => {
-      manager.resetPlayerPosition();
-    });
+          const hudRoom = document.getElementById('studio-hud-room');
+          if (hudRoom && lastRoomName !== loc.roomName) {
+            hudRoom.textContent = loc.roomName;
+            lastRoomName = loc.roomName;
+          }
 
-    // The map is a normal mouse-driven overlay, so release the pointer first.
-    manager.controller.setOnToggleMap(() => {
-      manager.controller.exitLock();
-      setShowDetailedMap(true);
-    });
+          const hudFacing = document.getElementById('studio-hud-facing');
+          const facingStr = `${loc.facing.cardinal} · ${loc.facing.degrees}°`;
+          if (hudFacing && lastFacingText !== facingStr) {
+            hudFacing.textContent = facingStr;
+            lastFacingText = facingStr;
+          }
 
-    manager.start();
+          const marker = document.getElementById('studio-minimap-marker');
+          if (marker) {
+            marker.setAttribute('transform', `translate(${x.toFixed(2)}, ${z.toFixed(2)})`);
+          }
+
+          const cone = document.getElementById('studio-minimap-cone');
+          if (cone) {
+            cone.setAttribute('transform', `rotate(${((-yaw * 180) / Math.PI).toFixed(1)})`);
+          }
+
+          const miniFacing = document.getElementById('studio-minimap-facing-val');
+          if (miniFacing && miniFacing.textContent !== facingStr) {
+            miniFacing.textContent = facingStr;
+          }
+
+          const miniRoom = document.getElementById('studio-minimap-room');
+          if (miniRoom && miniRoom.textContent !== loc.roomName) {
+            miniRoom.textContent = loc.roomName;
+          }
+
+          const miniCoords = document.getElementById('studio-minimap-coords');
+          const coordsStr = `${x.toFixed(1)}m · ${z.toFixed(1)}m`;
+          if (miniCoords && lastCoordsText !== coordsStr) {
+            miniCoords.textContent = coordsStr;
+            lastCoordsText = coordsStr;
+          }
+        });
+
+        manager.controller.setOnToggleCeiling(() => {
+          if (!manager) return;
+          const next = manager.toggleCeiling();
+          setIsCeilingVisible(next);
+        });
+        manager.controller.setOnResetPlayer(() => manager?.resetPlayerPosition());
+        manager.controller.setOnToggleMap(() => {
+          manager?.controller.exitLock();
+          setPlayerPos({ ...playerPosRef.current });
+          setShowDetailedMap(true);
+        });
+        manager.setOverview(true);
+        setIsCeilingVisible(manager.floorPlanRenderer.isCeilingVisible);
+        manager.start();
+        setSceneLoading(false);
+      })
+      .catch((err: unknown) => {
+        if (cancelled) return;
+        manager?.dispose();
+        manager = undefined;
+        sceneManagerRef.current = null;
+        console.error('Could not start the 3D renderer:', err);
+        setGraphicsError(true);
+        setSceneLoading(false);
+      });
 
     return () => {
-      manager.dispose();
+      cancelled = true;
+      manager?.dispose();
       sceneManagerRef.current = null;
     };
+  }, [hasModel, currentFloorPlan]);
+
+  const handleEnterFirstPerson = useCallback(() => {
+    if (!sceneManagerRef.current) return;
+    setLockError(null);
+    sceneManagerRef.current.setOverview(false);
+    setIsCeilingVisible(sceneManagerRef.current.floorPlanRenderer.isCeilingVisible);
+    setIsOverview(false);
+    sceneManagerRef.current.controller.requestLock();
   }, []);
 
-  const handleEnterFirstPerson = () => {
-    setLockError(null);
-    sceneManagerRef.current?.setOverview(false);
-    setIsOverview(false);
-    sceneManagerRef.current?.controller.requestLock();
-  };
+  const handleToggleCeiling = useCallback(() => {
+    if (!sceneManagerRef.current) return;
+    const next = sceneManagerRef.current.toggleCeiling();
+    setIsCeilingVisible(next);
+  }, []);
 
-  const handleTeleport = (x: number, y: number) => {
+  const handleTeleport = useCallback((x: number, y: number) => {
+    playerPosRef.current = { x, z: y, yaw: 0 };
+    setPlayerPos({ x, z: y, yaw: 0 });
     sceneManagerRef.current?.controller.setPosition(x, 1.65, y);
-  };
+    sceneManagerRef.current?.invalidate();
+  }, []);
 
-  const handlePlanReady = (plan: FloorPlanData, fileName: string) => {
-    sceneManagerRef.current?.loadFloorPlan(plan);
+  const handlePlanReady = useCallback((plan: FloorPlanData, fileName: string) => {
+    setSceneLoading(true);
+    setGraphicsError(false);
+    setLockError(null);
+    setShowDetailedMap(false);
     setCurrentFloorPlan(plan);
     setModelFileName(fileName);
     setPlayerPos({
@@ -93,15 +173,27 @@ export default function App() {
     });
     setIsOverview(true);
     setHasModel(true);
-  };
+  }, []);
 
-  const handleNewUpload = () => {
+  const handleNewUpload = useCallback(() => {
     sceneManagerRef.current?.controller.exitLock();
     setHasModel(false);
-  };
+    setIsLocked(false);
+    setShowDetailedMap(false);
+    setGraphicsError(false);
+    setSceneLoading(false);
+  }, []);
+
+  const handleOverview = useCallback(() => {
+    sceneManagerRef.current?.setOverview(true);
+    if (sceneManagerRef.current) {
+      setIsCeilingVisible(sceneManagerRef.current.floorPlanRenderer.isCeilingVisible);
+    }
+    setIsOverview(true);
+  }, []);
 
   return (
-    <main className="relative w-screen h-screen overflow-hidden bg-slate-950 font-sans select-none">
+    <main className="relative w-screen h-screen overflow-hidden bg-[#f6f2ea] font-sans select-none">
       {/* 3D WebGL Canvas Container */}
       <div
         id="viewport-3d"
@@ -114,18 +206,32 @@ export default function App() {
         }}
       />
 
+      {hasModel && sceneLoading && (
+        <div
+          role="status"
+          aria-live="polite"
+          className="studio-loading-veil"
+        >
+          <Loader2 className="studio-spinner" aria-hidden="true" />
+          <span>Opening your space…</span>
+        </div>
+      )}
+
       {graphicsError && (
         <div
           role="alert"
-          className="absolute inset-0 z-50 flex items-center justify-center bg-slate-950 px-6 text-center"
+          className="studio-graphics-error"
         >
-          <div className="max-w-md">
-            <h1 className="text-xl font-bold text-white">3D graphics could not start</h1>
-            <p className="mt-3 text-sm text-slate-300">
-              Your browser blocked WebGL for this page. This usually happens after many reloads in one tab.
-              Close this tab and open the app in a new one. If it keeps happening, make sure hardware
-              acceleration is turned on in your browser settings.
+          <div className="studio-pause-dialog">
+            <h1>3D graphics could not start</h1>
+            <p className="studio-lead" style={{ margin: '12px auto 24px', maxWidth: '38ch' }}>
+              The 3D view could not be loaded. Try opening your drawing again. If it keeps
+              happening, check your connection and that hardware acceleration is enabled in your
+              browser.
             </p>
+            <button className="studio-primary" onClick={handleNewUpload}>
+              Back to drawings
+            </button>
           </div>
         </div>
       )}
@@ -134,7 +240,9 @@ export default function App() {
         floorPlan={currentFloorPlan}
         hasModel={hasModel}
         isOverview={isOverview}
-        onOverview={() => { sceneManagerRef.current?.setOverview(true); setIsOverview(true); }}
+        isCeilingVisible={isCeilingVisible}
+        onToggleCeiling={handleToggleCeiling}
+        onOverview={handleOverview}
         modelFileName={modelFileName}
         isLocked={isLocked}
         lockError={lockError}

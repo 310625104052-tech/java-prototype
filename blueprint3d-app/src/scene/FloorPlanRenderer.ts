@@ -5,6 +5,7 @@ import { WallGenerator } from './WallGenerator';
 import { DoorGenerator } from './DoorGenerator';
 import { WindowGenerator } from './WindowGenerator';
 import { ArchitecturalStaging } from './ArchitecturalStaging';
+import { batchStaticMeshes } from './batchStaticMeshes';
 import { CollisionSystem } from '../navigation/CollisionSystem';
 
 export class FloorPlanRenderer {
@@ -219,6 +220,7 @@ export class FloorPlanRenderer {
       -0.1,
       bounds.minY + depth / 2
     );
+    foundationMesh.name = 'foundation-slab';
     foundationMesh.receiveShadow = true;
     this.rootGroup.add(foundationMesh);
 
@@ -239,7 +241,9 @@ export class FloorPlanRenderer {
     const pathGeom = new THREE.BoxGeometry(2.4, 0.02, 4.0);
     const pathMat = new THREE.MeshStandardMaterial({ color: 0x8a929a, roughness: 0.8 });
     const pathMesh = new THREE.Mesh(pathGeom, pathMat);
-    pathMesh.position.set(7.5, -0.01, -2.0);
+    // Match the finished floor: coplanar paving and foundation tops cause z-fighting.
+    pathMesh.position.set(7.5, 0.01, -2.0);
+    pathMesh.name = 'entrance-walkway';
     pathMesh.receiveShadow = true;
     this.rootGroup.add(pathMesh);
 
@@ -318,6 +322,7 @@ export class FloorPlanRenderer {
           });
         }
       }
+      batchStaticMeshes(group);
       this.rootGroup.add(group);
       return;
     }
@@ -336,6 +341,7 @@ export class FloorPlanRenderer {
       wallsGroup.add(wallMeshGroup);
     }
 
+    batchStaticMeshes(wallsGroup);
     this.rootGroup.add(wallsGroup);
   }
 
@@ -349,6 +355,7 @@ export class FloorPlanRenderer {
       doorsGroup.add(doorMesh);
     }
 
+    batchStaticMeshes(doorsGroup);
     this.rootGroup.add(doorsGroup);
   }
 
@@ -362,6 +369,7 @@ export class FloorPlanRenderer {
       windowsGroup.add(winMesh);
     }
 
+    batchStaticMeshes(windowsGroup);
     this.rootGroup.add(windowsGroup);
   }
 
@@ -415,17 +423,22 @@ export class FloorPlanRenderer {
         room.y + room.height / 2
       );
       this.ceilingGroup.add(fixtureMesh);
-
-      // Warm interior point light
-      const roomLight = new THREE.PointLight(0xfff3e0, 1.8, 8.0, 1.2);
-      roomLight.position.set(
-        room.x + room.width / 2,
-        defaultWallHeight - 0.2,
-        room.y + room.height / 2
-      );
-      roomLight.castShadow = false; // Point light shadows disabled for performance
-      this.ceilingGroup.add(roomLight);
     }
+
+    // Consolidated regional interior warm fill lights (capped at 2 to keep shaders at locked 60 FPS)
+    const midX = bounds.minX + width / 2;
+    const northZ = bounds.minY + depth * 0.28;
+    const southZ = bounds.minY + depth * 0.72;
+
+    const northLight = new THREE.PointLight(0xfff1dc, 1.6, Math.max(width, depth), 1.2);
+    northLight.position.set(midX, defaultWallHeight - 0.25, northZ);
+    northLight.castShadow = false;
+
+    const southLight = new THREE.PointLight(0xfff1dc, 1.6, Math.max(width, depth), 1.2);
+    southLight.position.set(midX, defaultWallHeight - 0.25, southZ);
+    southLight.castShadow = false;
+
+    this.ceilingGroup.add(northLight, southLight);
   }
 
   public dispose(): void {
@@ -468,5 +481,8 @@ export class FloorPlanRenderer {
     }
     const staging = new ArchitecturalStaging(this.floorPlanData, this.furnitureGroup, this.collisionSystem);
     staging.build();
+    for (const room of this.furnitureGroup.children) {
+      if (room instanceof THREE.Group) batchStaticMeshes(room);
+    }
   }
 }

@@ -1,10 +1,24 @@
 import { useRef, useState } from 'react';
-import { Box, Download, FileImage, Loader2, TriangleAlert, Upload } from 'lucide-react';
+import {
+  ArrowUpRight,
+  Building2,
+  Download,
+  Home,
+  Loader2,
+  Pause,
+  Play,
+  Sparkles,
+  TriangleAlert,
+} from 'lucide-react';
+import { StudioMark } from './StudioMark';
+import { PlanIllustration } from './PlanIllustration';
 import { WallDetectionResult } from '../types/blueprint';
 import { FloorPlanData } from '../types/floorplan';
 import { convertDetectionToFloorPlan } from '../utils/detectionToFloorPlan';
 import { ImportReview } from './ImportReview';
 import { generateSampleBlueprintFile } from '../utils/sampleBlueprintGenerator';
+import { sampleCollegeFloorPlan } from '../data/sampleCollegeFloorPlan';
+import { sampleFloorPlan } from '../data/sampleFloorPlan';
 
 // Backend base URL. Empty in dev (Vite proxies /api); set VITE_API_URL in production.
 const API_BASE = (import.meta.env.VITE_API_URL ?? '').replace(/\/+$/, '');
@@ -17,11 +31,12 @@ interface StartScreenProps {
 }
 
 export function StartScreen({ onPlanReady }: StartScreenProps) {
+  const [motionPaused, setMotionPaused] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [busyFile, setBusyFile] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [review,setReview] = useState<WallDetectionResult | null>(null);
+  const [review, setReview] = useState<WallDetectionResult | null>(null);
 
   const processFile = async (file: File) => {
     setError(null);
@@ -39,16 +54,22 @@ export function StartScreen({ onPlanReady }: StartScreenProps) {
     try {
       const formData = new FormData();
       formData.append('file', file);
-      const response = await fetch(`${API_BASE}/api/blueprint/detect`, { method: 'POST', body: formData });
+      const response = await fetch(`${API_BASE}/api/blueprint/detect`, {
+        method: 'POST',
+        body: formData,
+      });
 
       if (!(response.headers.get('content-type') || '').includes('application/json')) {
         throw new Error('The server sent an unexpected response. Is the backend running?');
       }
-      const data = (await response.json()) as WallDetectionResult & { success: boolean; error?: string };
+      const data = (await response.json()) as WallDetectionResult & {
+        success: boolean;
+        error?: string;
+      };
       if (!response.ok || !data.success) {
         throw new Error(data.error || 'Could not read walls from that image.');
       }
-      if (data.mode==='reference' || data.import_info?.reviewRequired) setReview(data);
+      if (data.mode === 'reference' || data.import_info?.reviewRequired) setReview(data);
       else onPlanReady(convertDetectionToFloorPlan(data), file.name);
     } catch (err) {
       setError(
@@ -74,100 +95,215 @@ export function StartScreen({ onPlanReady }: StartScreenProps) {
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   };
 
+  const runSampleThroughPipeline = async () => {
+    if (busyFile !== null) return;
+    const file = await generateSampleBlueprintFile();
+    await processFile(file);
+  };
+
   const isBusy = busyFile !== null;
 
-  if (review) return <ImportReview result={review} onReady={plan=>onPlanReady(plan,review.filename)} onBack={()=>setReview(null)}/>;
+  if (review) {
+    return (
+      <ImportReview
+        result={review}
+        onReady={(plan) => onPlanReady(plan, review.filename)}
+        onBack={() => setReview(null)}
+      />
+    );
+  }
 
   return (
-    <div className="absolute inset-0 z-40 flex flex-col items-center justify-center bg-slate-950 px-4">
-      <div className="absolute top-5 left-6 flex items-center gap-2 text-slate-300">
-        <Box className="w-5 h-5 text-sky-400" />
-        <span className="text-sm font-semibold tracking-tight">Blueprint3D</span>
-      </div>
-
-      <div className="w-full max-w-xl text-center">
-        <h1 className="text-2xl sm:text-3xl font-bold tracking-tight text-white">
-          Turn a 2D floor plan into a 3D model you can walk through
-        </h1>
-        <p className="mt-2 text-sm text-slate-400">Upload a floor plan image or DXF drawing to get started.</p>
-
-        <div
-          onDragOver={(e) => {
-            e.preventDefault();
-            if (!isBusy) setIsDragging(true);
-          }}
-          onDragLeave={() => setIsDragging(false)}
-          onDrop={(e) => {
-            e.preventDefault();
-            setIsDragging(false);
-            const file = e.dataTransfer.files?.[0];
-            if (file && !isBusy) processFile(file);
-          }}
-          className={`mt-8 rounded-3xl border-2 border-dashed transition-colors ${
-            isDragging ? 'border-sky-400 bg-sky-500/10' : 'border-slate-700 bg-slate-900/60 hover:border-slate-500'
-          }`}
-        >
-          <input
-            ref={inputRef}
-            id="blueprint-file-input"
-            type="file"
-            accept=".png,.jpg,.jpeg,.dxf,image/png,image/jpeg,application/dxf"
-            className="hidden"
-            onChange={(e) => {
-              const file = e.target.files?.[0];
-              if (file) processFile(file);
-            }}
-          />
-
-          {isBusy ? (
-            <div className="flex flex-col items-center gap-3 px-6 py-14" role="status" aria-live="polite">
-              <Loader2 className="w-9 h-9 text-sky-400 animate-spin" />
-              <div className="text-sm font-semibold text-white">Importing your drawing...</div>
-              <div className="text-xs text-slate-400">Reading drawing geometry from {busyFile}</div>
-            </div>
-          ) : (
-            <button
-              type="button"
-              id="upload-dropzone-btn"
-              onClick={() => inputRef.current?.click()}
-              className="flex w-full flex-col items-center gap-3 rounded-3xl px-6 py-14 focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-400"
-            >
-              <span className="flex h-14 w-14 items-center justify-center rounded-2xl border border-sky-400/40 bg-sky-500/15 text-sky-400">
-                <Upload className="w-7 h-7" />
-              </span>
-              <span className="text-base font-semibold text-white">Drop your floor plan here, or click to browse</span>
-              <span className="flex items-center gap-1.5 text-xs text-slate-400">
-                <FileImage className="w-3.5 h-3.5" />
-                PNG, JPG or DXF | up to {MAX_UPLOAD_MB} MB | automatic reconstruction or wall tracing
-              </span>
-            </button>
-          )}
-        </div>
-
-        {error && (
-          <div
-            role="alert"
-            className="mt-4 flex items-start gap-2 rounded-xl border border-red-500/40 bg-red-500/10 px-3 py-2.5 text-left text-xs text-red-200"
-          >
-            <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0 text-red-400" />
-            <span>{error}</span>
+    <div className={`studio-home${motionPaused ? ' is-motion-paused' : ''}`} data-ui>
+      <main className="studio-sheet">
+        <header className="studio-sheet-header">
+          <StudioMark />
+          <div className="studio-header-meta">
+            <span className="studio-header-note">From drawing to perspective.</span>
           </div>
-        )}
-
-        <p className="mt-6 text-xs text-slate-500">
-          No plan handy?{' '}
           <button
             type="button"
-            id="download-sample-btn"
-            onClick={downloadSample}
-            className="inline-flex items-center gap-1 font-medium text-sky-400 underline-offset-2 hover:underline focus:outline-none focus-visible:underline"
+            className="studio-motion"
+            aria-pressed={motionPaused}
+            onClick={() => setMotionPaused((value) => !value)}
           >
-            <Download className="w-3.5 h-3.5" />
-            Download a sample floor plan (PNG)
-          </button>{' '}
-          and upload it above.
-        </p>
-      </div>
+            {motionPaused ? <Play aria-hidden="true" /> : <Pause aria-hidden="true" />}
+            <span>{motionPaused ? 'Resume motion' : 'Pause motion'}</span>
+          </button>
+        </header>
+
+        <div className="studio-home-content">
+          <div className="studio-intro">
+            <div className="studio-kicker">
+<span>Floor plan studio</span>
+            </div>
+
+            <h1 aria-label="Make room for possibility.">
+              <span className="studio-title-line" aria-hidden="true">
+                <span>Make room</span>
+              </span>
+              <span className="studio-title-line" aria-hidden="true">
+                <span>
+                  for <span className="studio-title-word">possibility.</span>
+                </span>
+              </span>
+            </h1>
+
+            <p className="studio-lead">
+              Turn a floor plan into a space you can explore. Start with your drawing,
+              then review the details and step inside.
+            </p>
+
+            <div
+              className={`studio-upload${isDragging ? ' is-dragging' : ''}${isBusy ? ' is-busy' : ''}`}
+              onDragOver={(e) => {
+                e.preventDefault();
+                if (!isBusy) setIsDragging(true);
+              }}
+              onDragLeave={() => setIsDragging(false)}
+              onDrop={(e) => {
+                e.preventDefault();
+                setIsDragging(false);
+                const file = e.dataTransfer.files?.[0];
+                if (file && !isBusy) processFile(file);
+              }}
+            >
+              <span className="studio-corner-tick tl" aria-hidden="true" />
+              <span className="studio-corner-tick br" aria-hidden="true" />
+
+              <input
+                ref={inputRef}
+                id="blueprint-file-input"
+                type="file"
+                accept=".png,.jpg,.jpeg,.dxf,image/png,image/jpeg,application/dxf"
+                className="hidden"
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  if (file) processFile(file);
+                }}
+              />
+
+              {isBusy ? (
+                <div className="studio-upload-busy" role="status" aria-live="polite">
+                  <Loader2 className="studio-spinner" aria-hidden="true" />
+                  <div>
+                    <strong>Reading your drawing…</strong>
+                    <span title={busyFile || undefined}>
+                      Tracing wall geometry &amp; openings · {busyFile}
+                    </span>
+                  </div>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  id="upload-dropzone-btn"
+                  className="studio-upload-button"
+                  onClick={() => inputRef.current?.click()}
+                >
+                  <span>
+                    <strong>{isDragging ? 'Drop your drawing here' : 'Choose a drawing'}</strong>
+                    <span>or drag and drop it here</span>
+                  </span>
+                  <span className="studio-upload-icon-box" aria-hidden="true">
+                    <ArrowUpRight />
+                  </span>
+                </button>
+              )}
+
+              <div className="studio-upload-formats">
+                <span>PNG · JPG · DXF</span>
+                <span>Up to {MAX_UPLOAD_MB} MB</span>
+              </div>
+            </div>
+
+            {error && (
+              <div role="alert" className="studio-error">
+                <TriangleAlert aria-hidden="true" />
+                <span>{error}</span>
+              </div>
+            )}
+
+            {/* Instant Interactive Studio Specimens */}
+            <div className="studio-specimens" aria-label="Sample floor plans">
+              <div className="studio-specimens-header">
+                <span className="studio-specimens-title">Or explore a sample</span>
+              </div>
+              <div className="studio-specimens-grid">
+                <button
+                  type="button"
+                  className="studio-specimen-card"
+                  disabled={isBusy}
+                  onClick={() =>
+                    onPlanReady(sampleCollegeFloorPlan, 'college_engineering_level2_blueprint.png')
+                  }
+                >
+                  <span className="studio-specimen-icon">
+                    <Building2 size={15} aria-hidden="true" />
+                  </span>
+                  <span className="studio-specimen-body">
+                    <strong>Science &amp; technology</strong>
+                    <span className="studio-specimen-meta">{sampleCollegeFloorPlan.rooms.length} rooms · {Math.round((sampleCollegeFloorPlan.bounds.maxX - sampleCollegeFloorPlan.bounds.minX) * (sampleCollegeFloorPlan.bounds.maxY - sampleCollegeFloorPlan.bounds.minY))} m²</span>
+                  </span>
+                  <ArrowUpRight className="studio-specimen-arrow" size={14} aria-hidden="true" />
+                </button>
+
+                <button
+                  type="button"
+                  className="studio-specimen-card"
+                  disabled={isBusy}
+                  onClick={() => onPlanReady(sampleFloorPlan, 'modern_suburban_residence.png')}
+                >
+                  <span className="studio-specimen-icon">
+                    <Home size={15} aria-hidden="true" />
+                  </span>
+                  <span className="studio-specimen-body">
+                    <strong>Suburban residence</strong>
+                    <span className="studio-specimen-meta">{sampleFloorPlan.rooms.length} rooms · {Math.round((sampleFloorPlan.bounds.maxX - sampleFloorPlan.bounds.minX) * (sampleFloorPlan.bounds.maxY - sampleFloorPlan.bounds.minY))} m²</span>
+                  </span>
+                  <ArrowUpRight className="studio-specimen-arrow" size={14} aria-hidden="true" />
+                </button>
+              </div>
+
+              <div className="studio-sample-actions">
+                <button
+                  type="button"
+                  id="download-sample-btn"
+                  className="studio-sample"
+                  onClick={downloadSample}
+                >
+                  <Download aria-hidden="true" />
+                  <span>Download sample PNG</span>
+                </button>
+
+                <span className="studio-sample-divider" aria-hidden="true">·</span>
+
+                <button
+                  type="button"
+                  className="studio-sample"
+                  disabled={isBusy}
+                  onClick={runSampleThroughPipeline}
+                >
+                  <Sparkles aria-hidden="true" />
+                  <span>Scan sample drawing</span>
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <PlanIllustration motionPaused={motionPaused} />
+        </div>
+
+        <footer className="studio-sheet-footer">
+          <span>YOUR DRAWING. A NEW DIMENSION.</span>
+          <div className="studio-footer-steps" aria-hidden="true">
+            <span>Import</span>
+            <span>→</span>
+            <span>Review</span>
+            <span>→</span>
+            <span>Explore</span>
+          </div>
+        </footer>
+      </main>
     </div>
   );
 }

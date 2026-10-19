@@ -5,6 +5,9 @@ import { CollisionSystem } from '../navigation/CollisionSystem';
 import { FirstPersonController } from '../navigation/FirstPersonController';
 import { FloorPlanRenderer } from './FloorPlanRenderer';
 
+const FRAME_INTERVAL = 1000 / 60;
+const MAX_RENDER_PIXELS = 1_500_000;
+
 export class SceneManager {
   private container: HTMLElement;
   public scene: THREE.Scene;
@@ -16,12 +19,20 @@ export class SceneManager {
   public floorPlanRenderer: FloorPlanRenderer;
   public floorPlanData: FloorPlanData;
 
-  private clock: THREE.Clock;
+  private timer: THREE.Timer;
   private orbit: OrbitControls;
   private overview = false;
   private animationFrameId: number | null = null;
   private isRunning: boolean = false;
   private resizeObserver: ResizeObserver | null = null;
+  private fpsFrames: number = 0;
+  private fpsLastTime = 0;
+  private previousFrameTime = 0;
+  private renderPhase = 0;
+  private resolutionScale = 1;
+  private pixelRatioLimit = 1;
+  private fastWindows = 0;
+  public currentFps = 0;
 
   // Key lights
   private sunLight!: THREE.DirectionalLight;
@@ -50,8 +61,7 @@ export class SceneManager {
       antialias: true,
       powerPreference: 'high-performance',
     });
-    this.renderer.setSize(container.clientWidth || 1, container.clientHeight || 1);
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    this.resizeRenderer(container.clientWidth || 1, container.clientHeight || 1);
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFShadowMap;
     // Walls and lights never move, so rendering the 2048px shadow map every frame is
@@ -84,13 +94,16 @@ export class SceneManager {
     this.orbit = new OrbitControls(this.camera, this.renderer.domElement);
     this.orbit.enabled = false;
     this.orbit.enableDamping = true;
+    this.orbit.addEventListener('change', this.invalidate);
+    document.addEventListener('pointerlockchange', this.invalidate);
+    document.addEventListener('visibilitychange', this.onVisibilityChange);
     this.orbit.maxPolarAngle = Math.PI / 2 - .03;
 
     // 7. Lighting
     this.setupLighting();
 
-    // 8. Clock & resize handling
-    this.clock = new THREE.Clock();
+    // 8. Timer & resize handling
+    this.timer = new THREE.Timer();
     this.setupResizeHandler();
   }
 
@@ -123,6 +136,7 @@ export class SceneManager {
     this.sunLight.shadow.bias = -0.0003;
 
     this.scene.add(this.sunLight);
+    this.fitLightingToFloorPlan();
   }
 
   private setupResizeHandler(): void {
@@ -132,7 +146,8 @@ export class SceneManager {
         if (width > 0 && height > 0) {
           this.camera.aspect = width / height;
           this.camera.updateProjectionMatrix();
-          this.renderer.setSize(width, height);
+          this.resizeRenderer(width, height);
+          this.invalidate();
         }
       }
     });
@@ -143,11 +158,13 @@ export class SceneManager {
   public resetPlayerPosition(): void {
     const spawn = this.floorPlanData.spawnPoint;
     this.controller.setPosition(spawn.x, spawn.z || 1.65, spawn.y, spawn.yaw || 0);
+    this.invalidate();
   }
 
   /** Ask three.js to redraw the (otherwise frozen) shadow map on the next frame. */
   private refreshShadows(): void {
     this.renderer.shadowMap.needsUpdate = true;
+    this.invalidate();
   }
 
   public loadFloorPlan(floorPlanData: FloorPlanData): void {
@@ -165,6 +182,12 @@ export class SceneManager {
     this.floorPlanRenderer.build();
     this.scene.add(this.floorPlanRenderer.rootGroup);
     this.controller.setCollisionSystem(this.collisionSystem);
+    this.fitLightingToFloorPlan();
+    this.setOverview(true);
+  }
+
+  private fitLightingToFloorPlan(): void {
+    const { bounds } = this.floorPlanData;
     const cx = (bounds.minX+bounds.maxX)/2;
     const cz = (bounds.minY+bounds.maxY)/2;
     const d = Math.max(bounds.maxX-bounds.minX, bounds.maxY-bounds.minY, 10);
@@ -173,7 +196,6 @@ export class SceneManager {
     this.scene.add(this.sunLight.target);
     Object.assign(this.sunLight.shadow.camera, {left:-d, right:d, top:d, bottom:-d, far:d*5});
     this.sunLight.shadow.camera.updateProjectionMatrix();
-    this.setOverview(true);
   }
 
   public setOverview(enabled: boolean): void {
@@ -217,25 +239,94 @@ export class SceneManager {
     this.renderer.toneMappingExposure = visible ? 1.15 : 1.0;
   }
 
+  // OrbitControls emits change while damping settles. Once still, no frame is queued.
+  public invalidate = (): void => {
+    if (this.isRunning && !document.hidden && this.animationFrameId === null) {
+      this.animationFrameId = requestAnimationFrame(this.renderFrame);
+    }
+  };
+
+  private resizeRenderer(width: number, height: number): void {
+    // Keep large/high-DPI displays inside a predictable GPU fill budget; HTML stays sharp.
+    this.pixelRatioLimit = Math.min(window.devicePixelRatio || 1, 1.5, Math.sqrt(MAX_RENDER_PIXELS / (width * height)));
+    this.renderer.setPixelRatio(this.pixelRatioLimit * this.resolutionScale);
+    this.renderer.setSize(width, height);
+  }
+
+  private renderFrame = (timestamp = 0): void => {
+    this.animationFrameId = null;
+    if (!this.isRunning || document.hidden) return;
+    const walking = !this.overview && this.controller.isLocked;
+    if (walking && this.renderPhase && timestamp - this.renderPhase < FRAME_INTERVAL - 1.5) {
+      this.invalidate();
+      return;
+    }
+    if (walking && this.renderPhase) {
+      this.renderPhase += Math.max(1, Math.floor((timestamp - this.renderPhase + 0.1) / FRAME_INTERVAL)) * FRAME_INTERVAL;
+    } else this.renderPhase = timestamp;
+
+    this.timer.update();
+    const delta = this.timer.getDelta();
+    if (this.container.clientWidth === 0 || this.container.clientHeight === 0) return;
+    if (this.overview) this.orbit.update();
+    else if (walking) this.controller.update(delta);
+    this.renderer.render(this.scene, this.camera);
+    this.measureFrameRate(timestamp, walking);
+    if (walking) this.invalidate();
+  };
+
+  private measureFrameRate(timestamp: number, walking: boolean): void {
+    let text: string | undefined;
+    if (!walking || !this.previousFrameTime || timestamp - this.previousFrameTime > 250) {
+      this.fpsLastTime = timestamp;
+      this.fpsFrames = 0;
+      this.currentFps = 0;
+      text = walking ? 'Measuring…' : 'On demand';
+    } else {
+      this.fpsFrames++;
+      const elapsed = timestamp - this.fpsLastTime;
+      if (elapsed >= 750) {
+        this.currentFps = Math.round(this.fpsFrames * 1000 / elapsed);
+        text = `${this.currentFps} FPS`;
+        const previousScale = this.resolutionScale;
+        if (this.currentFps < 53) {
+          this.resolutionScale = Math.max(0.55, this.resolutionScale * 0.85);
+          this.fastWindows = 0;
+        } else if (this.currentFps >= 59 && ++this.fastWindows >= 4) {
+          this.resolutionScale = Math.min(1, this.resolutionScale + 0.05);
+          this.fastWindows = 0;
+        } else if (this.currentFps < 59) this.fastWindows = 0;
+        if (previousScale !== this.resolutionScale) this.renderer.setPixelRatio(this.pixelRatioLimit * this.resolutionScale);
+        this.fpsFrames = 0;
+        this.fpsLastTime = timestamp;
+      }
+    }
+    this.previousFrameTime = walking ? timestamp : 0;
+    if (text && typeof document.getElementById === 'function') {
+      for (const id of ['studio-hud-fps', 'studio-overview-fps']) {
+        const element = document.getElementById(id);
+        if (element && element.textContent !== text) element.textContent = text;
+      }
+    }
+  }
+
+  private onVisibilityChange = (): void => {
+    if (document.hidden) {
+      if (this.animationFrameId !== null) cancelAnimationFrame(this.animationFrameId);
+      this.animationFrameId = null;
+    } else {
+      this.timer.reset();
+      this.renderPhase = this.previousFrameTime = 0;
+      this.invalidate();
+    }
+  };
+
   public start(): void {
     if (this.isRunning) return;
     this.isRunning = true;
-    this.clock.start();
-
-    const animate = () => {
-      if (!this.isRunning) return;
-      this.animationFrameId = requestAnimationFrame(animate);
-
-      const delta = this.clock.getDelta();
-      // Container not laid out (or hidden) yet: drawing now would target a
-      // zero-size framebuffer and spam GL_INVALID_FRAMEBUFFER_OPERATION.
-      if (this.container.clientWidth === 0 || this.container.clientHeight === 0) return;
-      if (this.overview) this.orbit.update();
-      else this.controller.update(delta);
-      this.renderer.render(this.scene, this.camera);
-    };
-
-    animate();
+    this.renderPhase = this.previousFrameTime = 0;
+    this.timer.reset();
+    this.invalidate();
   }
 
   public stop(): void {
@@ -252,6 +343,10 @@ export class SceneManager {
       this.resizeObserver.disconnect();
       this.resizeObserver = null;
     }
+    document.removeEventListener('pointerlockchange', this.invalidate);
+    document.removeEventListener('visibilitychange', this.onVisibilityChange);
+    this.orbit.removeEventListener('change', this.invalidate);
+    this.timer.dispose();
     this.controller.dispose();
     this.orbit.dispose();
     this.floorPlanRenderer.dispose();

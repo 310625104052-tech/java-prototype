@@ -24,11 +24,13 @@ export class FirstPersonController {
   // Rotation angles in radians (Euler 'YXZ' convention)
   private yaw: number = 0;
   private pitch: number = 0;
+  private targetYaw: number = 0;
+  private targetPitch: number = 0;
 
   // Options
-  private moveSpeed: number = 3.2; // m/s
-  private sprintMultiplier: number = 1.6;
-  private mouseSensitivity: number = 0.0022;
+  private moveSpeed: number = 4.8; // m/s (brisk, fluid architectural walkthrough speed)
+  private sprintMultiplier: number = 1.8; // ~8.6 m/s
+  private mouseSensitivity: number = 0.0032; // Responsive, smooth mouse look
   private eyeHeight: number = 1.65; // standard human eye level (meters)
 
   // Motion physics
@@ -189,14 +191,12 @@ export class FirstPersonController {
     // it whips the view around, so drop it.
     if (Math.abs(movementX) > MAX_MOUSE_DELTA_PX || Math.abs(movementY) > MAX_MOUSE_DELTA_PX) return;
 
-    this.yaw -= movementX * this.mouseSensitivity;
-    this.pitch -= movementY * this.mouseSensitivity;
+    this.targetYaw -= movementX * this.mouseSensitivity;
+    this.targetPitch -= movementY * this.mouseSensitivity;
 
     // Clamp pitch between -85 and +85 degrees to avoid camera gimbal inversion
     const maxPitch = Math.PI / 2 - 0.05;
-    this.pitch = Math.max(-maxPitch, Math.min(maxPitch, this.pitch));
-
-    this.camera.rotation.set(this.pitch, this.yaw, 0, 'YXZ');
+    this.targetPitch = Math.max(-maxPitch, Math.min(maxPitch, this.targetPitch));
   }
 
   private onKeyDown(event: KeyboardEvent): void {
@@ -273,7 +273,9 @@ export class FirstPersonController {
     this.camera.position.set(x, y, z);
     if (yaw !== undefined) {
       this.yaw = yaw;
+      this.targetYaw = yaw;
       this.pitch = 0;
+      this.targetPitch = 0;
       this.camera.rotation.set(this.pitch, this.yaw, 0, 'YXZ');
     }
     this.velocity.set(0, 0, 0);
@@ -306,7 +308,13 @@ export class FirstPersonController {
     if (!this.isEnabled) return;
 
     // Constrain delta to avoid sudden spikes
-    const delta = Math.min(deltaSeconds, 0.1);
+    const delta = Math.min(deltaSeconds, 0.05);
+
+    // Smooth camera look interpolation: mathematically eliminates integer pointer-lock delta stutter
+    const lookDamping = 38.0;
+    this.yaw = THREE.MathUtils.damp(this.yaw, this.targetYaw, lookDamping, delta);
+    this.pitch = THREE.MathUtils.damp(this.pitch, this.targetPitch, lookDamping, delta);
+    this.camera.rotation.set(this.pitch, this.yaw, 0, 'YXZ');
 
     // Compute input intent vector
     this.direction.z = Number(this.keys.forward) - Number(this.keys.backward);
@@ -315,14 +323,6 @@ export class FirstPersonController {
 
     const isMoving = this.keys.forward || this.keys.backward || this.keys.left || this.keys.right;
     const speed = this.moveSpeed * (this.keys.sprint ? this.sprintMultiplier : 1.0);
-
-    // Smooth movement damping (drag / deceleration)
-    // Exponential decay is stable at any frame length. The old linear form
-    // (v -= v * 12 * dt) overshoots past zero and flips direction once dt > 1/12 s.
-    const damping = 12.0;
-    const drag = Math.exp(-damping * delta);
-    this.velocity.x *= drag;
-    this.velocity.z *= drag;
 
     if (isMoving) {
       // Calculate movement vector relative to camera horizontal yaw
@@ -336,45 +336,42 @@ export class FirstPersonController {
       const rightX = cosYaw;
       const rightZ = -sinYaw;
 
-      const moveX = forwardX * this.direction.z + rightX * this.direction.x;
-      const moveZ = forwardZ * this.direction.z + rightZ * this.direction.x;
+      const targetVx = (forwardX * this.direction.z + rightX * this.direction.x) * speed;
+      const targetVz = (forwardZ * this.direction.z + rightZ * this.direction.x) * speed;
 
-      const accel = 60.0;
-      this.velocity.x += moveX * speed * accel * delta;
-      this.velocity.z += moveZ * speed * accel * delta;
-
-      // Cap maximum speed
-      const currentSpeed = Math.hypot(this.velocity.x, this.velocity.z);
-      if (currentSpeed > speed) {
-        this.velocity.x = (this.velocity.x / currentSpeed) * speed;
-        this.velocity.z = (this.velocity.z / currentSpeed) * speed;
-      }
+      // Crisp acceleration toward target intent (settles smoothly in ~60ms without sluggish lag)
+      this.velocity.x = THREE.MathUtils.damp(this.velocity.x, targetVx, 18.0, delta);
+      this.velocity.z = THREE.MathUtils.damp(this.velocity.z, targetVz, 18.0, delta);
+    } else {
+      // Smooth deceleration to stop without rubber-banding
+      this.velocity.x = THREE.MathUtils.damp(this.velocity.x, 0, 15.0, delta);
+      this.velocity.z = THREE.MathUtils.damp(this.velocity.z, 0, 15.0, delta);
     }
 
     const currentX = this.camera.position.x;
     const currentZ = this.camera.position.z;
 
-    // Move in short sub-steps so a long frame can never carry the player across a thin
-    // wall in one jump (collision only resolves overlap, it does not sweep).
     const travel = Math.hypot(this.velocity.x, this.velocity.z) * delta;
-    const steps = Math.min(12, Math.max(1, Math.ceil(travel / MAX_STEP_M)));
-    const stepDelta = delta / steps;
+    if (travel > 1e-5) {
+      const steps = Math.min(4, Math.max(1, Math.ceil(travel / MAX_STEP_M)));
+      const stepDelta = delta / steps;
 
-    for (let i = 0; i < steps; i++) {
-      const resolved = this.collisionSystem.resolvePosition(
-        this.camera.position.x + this.velocity.x * stepDelta,
-        this.camera.position.z + this.velocity.z * stepDelta
-      );
+      for (let i = 0; i < steps; i++) {
+        const resolved = this.collisionSystem.resolvePosition(
+          this.camera.position.x + this.velocity.x * stepDelta,
+          this.camera.position.z + this.velocity.z * stepDelta
+        );
 
-      this.camera.position.x = resolved.x;
-      this.camera.position.z = resolved.z;
+        this.camera.position.x = resolved.x;
+        this.camera.position.z = resolved.z;
 
-      // Smooth wall sliding: project velocity vector onto wall tangent
-      if (resolved.collided && (resolved.normalX !== 0 || resolved.normalZ !== 0)) {
-        const dot = this.velocity.x * resolved.normalX + this.velocity.z * resolved.normalZ;
-        if (dot < 0) {
-          this.velocity.x -= dot * resolved.normalX;
-          this.velocity.z -= dot * resolved.normalZ;
+        // Smooth wall sliding: project velocity vector onto wall tangent
+        if (resolved.collided && (resolved.normalX !== 0 || resolved.normalZ !== 0)) {
+          const dot = this.velocity.x * resolved.normalX + this.velocity.z * resolved.normalZ;
+          if (dot < 0) {
+            this.velocity.x -= dot * resolved.normalX;
+            this.velocity.z -= dot * resolved.normalZ;
+          }
         }
       }
     }
@@ -386,8 +383,8 @@ export class FirstPersonController {
     }
 
     if (this.enableHeadBob) {
-      const bobFreq = 10.0;
-      const bobAmp = 0.035;
+      const bobFreq = 9.0;
+      const bobAmp = 0.012; // Subtle natural gait without camera shake
       const bobY = Math.sin(this.walkDistance * bobFreq) * bobAmp;
       this.camera.position.y = this.eyeHeight + bobY;
     } else {
