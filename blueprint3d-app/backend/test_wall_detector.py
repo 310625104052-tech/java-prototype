@@ -63,6 +63,35 @@ def detect(image):
 
 
 class DetectorTests(unittest.TestCase):
+    def test_narrow_t_junction_gap_warns_without_widening(self):
+        image=Image.new('RGB',(1200,950),'white')
+        draw=ImageDraw.Draw(image)
+        draw.rectangle((100,100,1100,800),outline=(20,20,20),width=10)
+        for box in [(595,100,605,385),(595,475,605,800),
+                    (600,445,785,455),(875,445,1100,455)]:
+            draw.rectangle(box,fill=(20,20,20))
+        result=detect(image)
+        self.assertTrue(result['success'])
+        self.assertTrue(any(o['type']=='door' and o['width']<22 for o in result['openings']))
+        self.assertTrue(any('too narrow for walking' in w for w in result['import_info']['warnings']))
+
+    def test_thin_partitions_survive_thick_exterior_and_pale_symbols(self):
+        image=Image.new('RGB',(900,700),'white')
+        d=ImageDraw.Draw(image)
+        d.rectangle((60,60,840,640),outline=(20,20,20),width=24)
+        for box in [(447,75,453,625),(450,427,825,433)]:
+            d.rectangle(box,fill=(20,20,20))
+        for box in [(444,290,456,370),(575,424,655,436)]:
+            d.rectangle(box,fill='white')
+        d.line((450,290,530,290),fill=(175,175,175),width=1)
+        d.line((575,430,575,510),fill=(175,175,175),width=1)
+        d.rectangle((150,160,300,230),outline=(170,170,170),width=2)
+        result=detect(image)
+        self.assertTrue(result['success'],result.get('error'))
+        self.assertEqual(len(result['rooms']),3)
+        self.assertEqual(sum(o['type']=='door' for o in result['openings']),2)
+        self.assertTrue(any('Thinner partitions' in w for w in result['import_info']['warnings']))
+
     def test_exterior_leaf_is_door_and_parallel_glazing_is_window(self):
         image = plan()
         draw = ImageDraw.Draw(image)

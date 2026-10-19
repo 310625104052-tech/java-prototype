@@ -50,6 +50,11 @@ for (const file of process.argv.slice(2)) {
  const spawn=collision.resolvePosition(plan.spawnPoint.x,plan.spawnPoint.y);
  assert.ok(!spawn.collided, 'Spawn point must have walking clearance');
  for(const door of plan.doors) {
+  // Preserve narrow source gaps rather than carving wider passage through walls.
+  if(door.width<.52) {
+   assert.ok(plan.importWarnings?.some(w=>w.includes('too narrow for walking')), 'Narrow passages must require review');
+   continue;
+  }
   const pos=collision.resolvePosition(door.x,door.y);
   assert.ok(Math.hypot(pos.x-door.x,pos.z-door.y)<.03, `Door ${door.id} center is blocked by collision walls`);
  }

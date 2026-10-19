@@ -66,12 +66,23 @@ node node_modules/esbuild/bin/esbuild tests/geometry-regression.ts --bundle --pl
 node node_modules/.cache/blueprint3d/geometry-regression.mjs
 ```
 
-Fourteen backend regression methods cover clean black/gray inputs, smaller images,
+Twenty backend regression methods cover clean black/gray inputs, smaller images,
 outline/reference imports, invalid/blank content, nested transformed DXF blocks,
 explicit review state, geometry holes, opening heights and door evidence.
 Three.js checks cover concave/holed meshes, bounds, dimensions, spawn/door clearance
 and manual tracing. Optional JSON-response paths passed to the last command check
 saved real detections too.
+
+The variety suite checks 46 synthetic variants, including mixed exterior/partition
+widths, gray walls without black ink, 450–1500 px exports, quarter-turn rotations,
+mirroring/inversion, colored floors, JPEG, noise, blur, skew and paired outlines.
+Recognizable orthogonal fixtures must recover their known three rooms and two doors;
+skewed and outlined drawings must request review. The original 16 supplied files
+and the later furnished apartment sample are checked separately as real imports.
+Thin partitions are recovered without widening source gaps. Passages narrower than
+walking clearance at the estimated scale now request review, as do substantial
+angled walls. This is a heuristic importer, not a guarantee of accurate reconstruction
+for every blueprint style. Low-resolution sections remain editable references.
 
 DXF implementation follows the [ezdxf decomposition documentation](https://ezdxf.readthedocs.io/en/stable/disassemble.html).
 

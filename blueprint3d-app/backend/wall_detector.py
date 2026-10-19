@@ -325,6 +325,10 @@ def detect_walls_from_image_bytes(image_bytes: bytes) -> Dict[str, Any]:
             })
             wall_id += 1
 
+    diagonal_length=sum(w['length'] for w in merged_walls if w['orientation']=='diagonal')
+    if diagonal_length > sum(w['length'] for w in merged_walls) * .15:
+        import_info['warnings'].append('The drawing contains substantial angled walls. Door and room recovery may be incomplete; align a rotated plan with the image axes or trace its layout.')
+
     # 7. Openings come from structural gaps and enclosed-space topology.
     # Thin frame/arc pixels do not close a doorway, and wall thickness does not
     # decide whether a partition is exterior.
@@ -395,6 +399,9 @@ def detect_walls_from_image_bytes(image_bytes: bytes) -> Dict[str, Any]:
         "status": scale_status,
         "referenceElement": "standard_architectural_door" if scale_samples else "college_envelope_heuristic",
     }
+    narrow_doors=sum(o['type']=='door' and o['width']/pixels_per_meter < .52 for o in detected_openings)
+    if narrow_doors:
+        import_info['warnings'].append(f'{narrow_doors} detected openings are too narrow for walking at the estimated scale. Review the source and scale; gaps were not widened.')
 
     # 9. Room & Floor Space Segmentation
     # Invert structural wall mask to find enclosed spaces

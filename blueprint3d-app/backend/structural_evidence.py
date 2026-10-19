@@ -55,7 +55,7 @@ def erode(mask: np.ndarray) -> np.ndarray:
     return ~dilate(~mask)
 
 
-def estimate_stroke_px(ink: np.ndarray) -> int:
+def estimate_stroke_px(ink: np.ndarray, percentile=75, minimum=2) -> int:
     """The thickness, in pixels, that walls are drawn at.
 
     Taken as the 75th percentile of horizontal ink run-lengths. Walls are the longest
@@ -76,10 +76,10 @@ def estimate_stroke_px(ink: np.ndarray) -> int:
         deltas = np.diff(padded)
         starts = np.flatnonzero(deltas == 1)
         run = np.flatnonzero(deltas == -1) - starts
-        run = run[(run >= 2) & (run <= limit)]
+        run = run[(run >= minimum) & (run <= limit)]
         if run.size:
             lengths.append(run)
-    return int(np.percentile(np.concatenate(lengths), 75)) if lengths else 0
+    return int(np.percentile(np.concatenate(lengths), percentile)) if lengths else 0
 
 
 def opening_by_reconstruction(mask: np.ndarray, radius: int) -> np.ndarray:
@@ -109,7 +109,7 @@ def opening_by_reconstruction(mask: np.ndarray, radius: int) -> np.ndarray:
     return out
 
 
-def wall_evidence(image, stroke=None):
+def wall_evidence(image, stroke=None, recover_partitions=True):
     rgb = np.asarray(image.convert('RGB')).astype(np.int16)
     gray = cv2.cvtColor(rgb.astype(np.uint8), cv2.COLOR_RGB2GRAY)
     neutral = rgb.max(axis=2) - rgb.min(axis=2) <= 22
@@ -132,6 +132,19 @@ def wall_evidence(image, stroke=None):
                          'reliably from annotations; use a larger export.')
     radius = max(1, min(8, round(thickness / 3)))
     structural = opening_by_reconstruction(ink, radius)
+    # Exterior walls can be twice as thick as partitions. Retain long, narrower
+    # strokes without retaining thin door leaves and furniture outlines.
+    narrow = MIN_WALL_STROKE_PX
+    length = max(20, thickness * 2)
+    partitions = np.zeros_like(ink)
+    if recover_partitions:
+        for shape in ((narrow, length), (length, narrow)):
+            partitions |= cv2.morphologyEx(ink.astype(np.uint8), cv2.MORPH_OPEN,
+                                          np.ones(shape, np.uint8)).astype(bool)
+    added = partitions & ~structural
+    structural |= partitions
+    if added.sum() > structural.sum() * .05:
+        thickness = min(thickness, estimate_stroke_px(added, 75, MIN_WALL_STROKE_PX) or thickness)
     n, labels, stats, _ = cv2.connectedComponentsWithStats(structural.astype(np.uint8), connectivity=8)
     cleaned = np.zeros_like(ink)
     minimum_span = max(thickness * 4, min(ink.shape) * .045)
@@ -145,7 +158,7 @@ def wall_evidence(image, stroke=None):
     return ink, cleaned, thickness
 
 
-def bridge_wall_gaps(structural, thickness, raw=None, anchor_factor=1.4):
+def bridge_wall_gaps(structural, thickness, raw=None, anchor_factor=1.4, mixed_width=False):
     """Connect aligned wall ends, including gaps containing no ink at all.
 
     Directional anchors prevent joining neighbouring parallel walls across a room.
@@ -155,6 +168,7 @@ def bridge_wall_gaps(structural, thickness, raw=None, anchor_factor=1.4):
     max_gap = max(12, round(min(structural.shape[1] * .23, thickness * 24)))
     bridges = np.zeros_like(wall)
     accepted = []
+    interior_gap_limit = max(thickness * 12, estimate_stroke_px(structural) * 4) if mixed_width else thickness * 12
     wr, wc = np.where(structural)
     bounds = (wr.min(), wr.max(), wc.min(), wc.max())
     for vertical in (False, True):
@@ -221,9 +235,20 @@ def bridge_wall_gaps(structural, thickness, raw=None, anchor_factor=1.4):
                     covered = [s.any(axis=0).mean() for s in sides if s.size]
                 if covered and max(covered) > .8:
                     continue
-                near_edge = min(abs(y-bounds[0]), abs(y+h-1-bounds[1]),
-                                abs(x-bounds[2]), abs(x+w-1-bounds[3])) <= thickness * 3
-                if not near_edge and span > thickness * 12:
+                if mixed_width:
+                    near_edge = (min(abs(x-bounds[2]), abs(x+w-1-bounds[3])) if vertical else
+                                 min(abs(y-bounds[0]), abs(y+h-1-bounds[1]))) <= thickness * 3
+                else:
+                    near_edge = min(abs(y-bounds[0]), abs(y+h-1-bounds[1]),
+                                    abs(x-bounds[2]), abs(x+w-1-bounds[3])) <= thickness * 3
+                if mixed_width and raw is not None and not near_edge and span >= thickness * 8:
+                    # Inset exterior glazing need not lie on the bounding box.
+                    # Parallel rails distinguish a wide window from an open hall.
+                    patch = raw[y:y+h, x:x+w]
+                    rails = np.flatnonzero(patch.mean(axis=0 if vertical else 1) >= .60)
+                    if rails.size > 1 and rails[-1]-rails[0] >= max(3, thickness*.5):
+                        near_edge = True
+                if not near_edge and span > interior_gap_limit:
                     continue
                 accepted.append((span,near_edge,labels==i,x+w/2,y+h/2))
     unique=[]
@@ -271,7 +296,10 @@ def prepare_structure(img):
         image=ImageOps.invert(image)
     image=ImageOps.expand(image,16,'white')
     try:
-        raw,wall,stroke=wall_evidence(image)
+        scanned = max(source_size)<750 and np.percentile(gray,90)<250
+        raw,wall,stroke=wall_evidence(image,recover_partitions=min(source_size)>=250 and not scanned)
+        if stroke < estimate_stroke_px(raw) * .75:
+            warnings.append('Thinner partitions were recovered alongside thicker exterior walls. Review the overlay: short partitions and doorways may still be missing.')
         if wall.sum()<raw.sum()*.25 or cropped:
             raise ValueError('Outline extraction required')
     except ValueError:
@@ -294,7 +322,14 @@ def prepare_structure(img):
     wall=(cv2.morphologyEx(mask,cv2.MORPH_CLOSE,np.ones((1,micro),np.uint8)) |
           cv2.morphologyEx(mask,cv2.MORPH_CLOSE,np.ones((micro,1),np.uint8))).astype(bool)
     scanned = max(source_size)<750 and np.percentile(gray,90)<250
-    gaps=bridge_wall_gaps(wall,stroke,raw if not scanned else None,3.0 if scanned else 1.4)
+    mixed_width = method=='filled_walls' and stroke < estimate_stroke_px(raw) * .75
+    symbols=raw
+    if mixed_width:
+        evidence_gray=cv2.cvtColor(np.asarray(image),cv2.COLOR_RGB2GRAY)
+        # Pale frame/leaf lines are evidence for an opening, never filled masonry.
+        contrast=cv2.dilate(evidence_gray,np.ones((7,7),np.uint8))-evidence_gray
+        symbols=raw | ((evidence_gray<235) & (contrast>25))
+    gaps=bridge_wall_gaps(wall,stroke,symbols if not scanned else None,3.0 if scanned else 1.4,mixed_width)
     raw_closed=cv2.morphologyEx(raw.astype(np.uint8),cv2.MORPH_CLOSE,np.ones((3,3),np.uint8)).astype(bool)
     outside=exterior(raw_closed)
     raw_boundary=raw_closed & cv2.dilate(outside.astype(np.uint8),np.ones((3,3),np.uint8)).astype(bool)
@@ -333,7 +368,7 @@ def prepare_structure(img):
         span = float(h if vertical else w)
         axis = y + h/2 if vertical else x + w/2
         cross = x + w/2 if vertical else y + h/2
-        thin_ink = raw & ~cv2.dilate(wall.astype(np.uint8), np.ones((3,3),np.uint8)).astype(bool)
+        thin_ink = symbols & ~cv2.dilate(wall.astype(np.uint8), np.ones((3,3),np.uint8)).astype(bool)
         ink = thin_ink.T if vertical else thin_ink
         for end in (axis-span/2, axis+span/2):
             lo, hi = max(0, round(end-stroke*.55)), min(ink.shape[1], round(end+stroke*.55+1))
@@ -346,7 +381,7 @@ def prepare_structure(img):
                 if np.any(leaf): swing = True
         # Adjacent glazing at a corner can mimic a perpendicular leaf. Two
         # continuous parallel frame rails across the aperture identify glass.
-        frame_ink = raw.T if vertical else raw
+        frame_ink = symbols.T if vertical else symbols
         a, b = max(0,round(axis-span*.4)), min(frame_ink.shape[1],round(axis+span*.4))
         c, d = max(0,round(cross-stroke)), min(frame_ink.shape[0],round(cross+stroke+1))
         rail_rows = np.flatnonzero(frame_ink[c:d,a:b].sum(axis=1) >= (b-a)*.75) if b>a else np.array([])

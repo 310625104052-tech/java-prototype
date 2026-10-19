@@ -27,9 +27,10 @@ def import_blueprint(data, filename):
     gray=cv2.cvtColor(image,cv2.COLOR_BGR2GRAY)
     if float(gray.std())<1:
         raise ValueError('The image is blank; no drawing content was found.')
-    # Very faint drawings can be elevations/sections or annotation-only sheets.
-    # Keep them as editable references instead of inventing a 3D floor layout.
-    if (gray<100).mean()<.003:
+    # Pale filled walls are valid evidence even when the drawing has no black ink.
+    visible=(gray<235).astype(np.uint8)
+    solid=cv2.morphologyEx(visible,cv2.MORPH_OPEN,np.ones((3,3),np.uint8))
+    if (gray<100).mean()<.003 and (min(gray.shape)<250 or solid.mean()<.003):
         result={'success':False,'error':'No clear floor footprint was found. A section or elevation does not define a top-down layout.'}
     else:
         result=detect_walls_from_image_bytes(raster)
