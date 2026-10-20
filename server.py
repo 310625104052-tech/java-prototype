@@ -233,6 +233,54 @@ def load_level():
     return jsonify(success=True)
 
 
+@app.route("/api/location", methods=["GET"])
+def get_live_location():
+    """Provide current live location for walkthrough radar."""
+    # In real use, this could read from GPS or local sensors.
+    # For demo, read cached coordinates and simulate heading.
+    loc_file = MAPS_DIR / "location.json"
+    if not loc_file.exists():
+        return jsonify(success=False, error="No cached location."), 404
+
+    loc = eval(loc_file.read_text())
+    heading = 34  # Example: NE 34° from compass
+    return jsonify(success=True, lat=loc["lat"], lon=loc["lon"], heading=heading)
+
+
+#Offline Map Integration
+MAPS_DIR = PROJECT_ROOT / "tools/maps"
+MAPS_DIR.mkdir(parents=True, exist_ok=True)
+
+@app.route("/api/geocode", methods=["POST"])
+def geocode_address():
+    """Convert a typed address to coordinates and cache map tiles offline."""
+    data = request.get_json(silent=True) or {}
+    address = data.get("address")
+    if not address:
+        return jsonify(success=False, error="No address provided."), 400
+
+    # Step 1: Geocode address using Google Maps API
+    api_key = os.environ.get("GOOGLE_MAPS_API_KEY")
+    url = f"https://maps.googleapis.com/maps/api/geocode/json?address={address}&key={api_key}"
+    resp = requests.get(url).json()
+    if not resp.get("results"):
+        return jsonify(success=False, error="Address not found."), 404
+
+    loc = resp["results"][0]["geometry"]["location"]
+    lat, lon = loc["lat"], loc["lng"]
+
+    # Step 2: Cache satellite imagery for offline use
+    tile_url = f"https://maps.googleapis.com/maps/api/staticmap?center={lat},{lon}&zoom=18&size=640x640&maptype=satellite&key={api_key}"
+    tile_data = requests.get(tile_url).content
+    tile_path = MAPS_DIR / "satellite.png"
+    Image.open(BytesIO(tile_data)).save(tile_path)
+
+    # Step 3: Save coordinates for later use in walkthrough
+    (MAPS_DIR / "location.json").write_text(f'{{"lat": {lat}, "lon": {lon}}}')
+
+    return jsonify(success=True, lat=lat, lon=lon, tilePath=str(tile_path))
+
+
 if __name__ == "__main__":
     # 0.0.0.0 + $PORT rather than the local-dev 127.0.0.1:8000: Render (and Fly/Railway)
     # inject PORT at runtime and route traffic to it, and a loopback-only bind would refuse
