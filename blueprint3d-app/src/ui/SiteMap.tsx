@@ -3,7 +3,17 @@ import { Loader2, MapPin, Search, X, ZoomIn, ZoomOut } from 'lucide-react';
 import type { FloorPlanData } from '../types/floorplan';
 import { StudioMark } from './StudioMark';
 import {
-  GeoFeature, SiteMapData, gazeBearing, loadSampleSite, lookupSite, planToMap,
+  GeoFeature,
+  SiteMapData,
+  gazeBearing,
+  getPlanStorageKey,
+  loadBundledRegion,
+  loadPlanMapState,
+  loadSampleSite,
+  lookupSite,
+  planToMap,
+  readCache,
+  savePlanMapState,
 } from '../utils/geoMap';
 
 interface SiteMapProps {
@@ -30,6 +40,14 @@ export function SiteMap({ isOpen, floorPlan, playerPos, onClose }: SiteMapProps)
   const [error, setError] = useState<string | null>(null);
   const [bearing, setBearing] = useState(0);
   const [zoom, setZoom] = useState(1);
+  const [placeQuery, setPlaceQuery] = useState<string | undefined>(undefined);
+  const [regionFile, setRegionFile] = useState<string | undefined>(undefined);
+
+  const planKey = useMemo(() => getPlanStorageKey(floorPlan), [floorPlan]);
+
+  // Open zoomed so the building is clearly visible: about a fifth of the view across.
+  const span = Math.max(floorPlan.bounds.maxX - floorPlan.bounds.minX, floorPlan.bounds.maxY - floorPlan.bounds.minY, 5);
+  const fitZoom = Math.min(6, Math.max(1, 300 / (span * 5)));
 
   useEffect(() => {
     if (!isOpen) return;
@@ -42,23 +60,99 @@ export function SiteMap({ isOpen, floorPlan, playerPos, onClose }: SiteMapProps)
     setBusy(true);
     setError(null);
     try {
-      setSite(await task());
+      const data = await task();
+      setSite(data);
       setZoom(fitZoom);
+      return data;
     } catch (err) {
       setError(err instanceof Error ? err.message : 'The map could not be loaded.');
+      return null;
     } finally {
       setBusy(false);
     }
   };
 
-  const submit = (e: FormEvent) => {
-    e.preventDefault();
-    if (query.trim().length >= 3) void run(() => lookupSite(query));
+  useEffect(() => {
+    if (!isOpen) return;
+
+    const saved = loadPlanMapState(planKey);
+    if (!saved) {
+      setBearing(0);
+      setSite(null);
+      setQuery('');
+      setError(null);
+      setPlaceQuery(undefined);
+      setRegionFile(undefined);
+      return;
+    }
+
+    if (typeof saved.bearing === 'number') {
+      setBearing(saved.bearing);
+    }
+
+    if (saved.regionFile) {
+      setRegionFile(saved.regionFile);
+      setPlaceQuery(undefined);
+      setQuery('');
+      void run(() => loadBundledRegion(saved.regionFile!));
+    } else if (saved.placeQuery) {
+      setPlaceQuery(saved.placeQuery);
+      setRegionFile(undefined);
+      setQuery(saved.placeQuery);
+
+      const cached = readCache(saved.placeQuery);
+      if (cached) {
+        setSite(cached);
+        setZoom(fitZoom);
+        setError(null);
+      } else {
+        setSite(null);
+      }
+    } else {
+      setPlaceQuery(undefined);
+      setRegionFile(undefined);
+      setSite(null);
+    }
+  }, [isOpen, planKey, fitZoom]);
+
+  const handleBearingChange = (val: number) => {
+    setBearing(val);
+    savePlanMapState(planKey, {
+      bearing: val,
+      placeQuery,
+      regionFile,
+    });
   };
 
-  // Open zoomed so the building is clearly visible: about a fifth of the view across.
-  const span = Math.max(floorPlan.bounds.maxX - floorPlan.bounds.minX, floorPlan.bounds.maxY - floorPlan.bounds.minY, 5);
-  const fitZoom = Math.min(6, Math.max(1, 300 / (span * 5)));
+  const submit = (e: FormEvent) => {
+    e.preventDefault();
+    const q = query.trim();
+    if (q.length >= 3) {
+      void run(async () => {
+        const data = await lookupSite(q);
+        setPlaceQuery(q);
+        setRegionFile(undefined);
+        savePlanMapState(planKey, {
+          bearing,
+          placeQuery: q,
+        });
+        return data;
+      });
+    }
+  };
+
+  const handleLoadRegion = (file: string) => {
+    void run(async () => {
+      const data = await loadBundledRegion(file);
+      setPlaceQuery(undefined);
+      setRegionFile(file);
+      savePlanMapState(planKey, {
+        bearing,
+        regionFile: file,
+      });
+      return data;
+    });
+  };
 
   const centre = useMemo(() => ({
     x: (floorPlan.bounds.minX + floorPlan.bounds.maxX) / 2,
@@ -116,14 +210,14 @@ export function SiteMap({ isOpen, floorPlan, playerPos, onClose }: SiteMapProps)
                 </button>
               </div>
             </form>
-            <button type="button" className="studio-secondary" disabled={busy} onClick={() => void run(loadSampleSite)}>
+            <button type="button" className="studio-secondary" disabled={busy} onClick={() => handleLoadRegion('sample-chennai.json')}>
               <MapPin size={15} aria-hidden="true" /> Use the sample campus (works offline)
             </button>
             {error && <p className="studio-site-error" role="alert">{error}</p>}
 
             <label className="studio-site-slider">
               Plan top points to {bearing}° ({compass(bearing)})
-              <input type="range" min={0} max={359} value={bearing} onChange={(e) => setBearing(Number(e.target.value))} />
+              <input type="range" min={0} max={359} value={bearing} onChange={(e) => handleBearingChange(Number(e.target.value))} />
             </label>
             <p className="studio-site-note">
               A floor plan does not say which way is north. Turn the slider until the building sits as it does on the ground.
