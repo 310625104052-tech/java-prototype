@@ -1,9 +1,12 @@
 """Site map tests. No network: the HTTP layer is replaced with canned answers."""
+import json
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 import geo
 
 OVERPASS_WAYS = [
@@ -110,6 +113,107 @@ class GeoTests(unittest.TestCase):
         with mock.patch.object(geo, "_http", side_effect=flaky):
             self.assertEqual(len(geo.fetch_elements(13.0, 80.0)), len(OVERPASS_WAYS))
         self.assertEqual(seen[:2], list(geo.OVERPASS_SERVERS[:2]))
+
+    def test_validate_map_accepts_valid_map(self):
+        m = geo.build_map(13.0, 80.0, "Test", OVERPASS_WAYS)
+        self.assertTrue(geo.validate_map(m))
+
+    def test_validate_map_rejects_invalid_maps(self):
+        valid = geo.build_map(13.0, 80.0, "Test", OVERPASS_WAYS)
+
+        with self.assertRaises(geo.GeoError):
+            geo.validate_map("not a dict")
+
+        # missing / bad center
+        with self.assertRaises(geo.GeoError):
+            bad = dict(valid)
+            del bad["center"]
+            geo.validate_map(bad)
+
+        with self.assertRaises(geo.GeoError):
+            bad = dict(valid)
+            bad["center"] = {"lat": 95, "lon": 80.0, "name": "Out of bounds"}
+            geo.validate_map(bad)
+
+        with self.assertRaises(geo.GeoError):
+            bad = dict(valid)
+            bad["center"] = {"lat": 13.0, "lon": 195.0, "name": "Out of bounds"}
+            geo.validate_map(bad)
+
+        with self.assertRaises(geo.GeoError):
+            bad = dict(valid)
+            bad["center"] = {"lat": 13.0, "lon": 80.0, "name": "   "}
+            geo.validate_map(bad)
+
+        # non-positive or bad radius
+        for bad_r in (0, -10, "300", None, True):
+            with self.subTest(bad_r=bad_r), self.assertRaises(geo.GeoError):
+                bad = dict(valid, radius=bad_r)
+                geo.validate_map(bad)
+
+        # invalid kind
+        with self.assertRaises(geo.GeoError):
+            bad = dict(valid, features=[{"k": "railway", "c": "track", "p": [[0.0, 0.0], [1.0, 1.0]]}])
+            geo.validate_map(bad)
+
+        # points too few
+        with self.assertRaises(geo.GeoError):
+            bad = dict(valid, features=[{"k": "road", "c": "primary", "p": [[0.0, 0.0]]}])
+            geo.validate_map(bad)
+
+        # bad coordinate types
+        for bad_p in (
+            [[0.0, "not a number"], [1.0, 1.0]],
+            [[0.0, None], [1.0, 1.0]],
+            [[True, 0.0], [1.0, 1.0]],
+            [[0.0], [1.0, 1.0]],
+            "not a list",
+        ):
+            with self.subTest(bad_p=bad_p), self.assertRaises(geo.GeoError):
+                bad = dict(valid, features=[{"k": "road", "c": "primary", "p": bad_p}])
+                geo.validate_map(bad)
+
+        # bad places
+        with self.assertRaises(geo.GeoError):
+            bad = dict(valid, places=[{"n": "Spot", "k": "unknown_kind", "x": 1.0, "y": 2.0, "d": 5.0}])
+            geo.validate_map(bad)
+
+        with self.assertRaises(geo.GeoError):
+            bad = dict(valid, places=[{"n": "Spot", "k": "road", "x": 1.0, "y": 2.0, "d": -1.0}])
+            geo.validate_map(bad)
+
+        # bad source
+        with self.assertRaises(geo.GeoError):
+            bad = dict(valid, source="Google Maps proprietary")
+            geo.validate_map(bad)
+
+        # bad fetchedAt
+        for bad_date in ("yesterday", "2026-02-31", "2026/10/22", 12345):
+            with self.subTest(bad_date=bad_date), self.assertRaises(geo.GeoError):
+                bad = dict(valid, fetchedAt=bad_date)
+                geo.validate_map(bad)
+
+    def test_bundled_regions_catalog_and_files_are_valid(self):
+        root = Path(__file__).resolve().parent.parent
+        manifest_path = root / "public" / "geo" / "regions.json"
+        self.assertTrue(manifest_path.is_file(), f"Manifest file not found: {manifest_path}")
+
+        regions = json.loads(manifest_path.read_text(encoding="utf-8"))
+        self.assertIsInstance(regions, list)
+        self.assertGreater(len(regions), 0, "regions.json catalog should not be empty")
+
+        for region in regions:
+            self.assertIn("id", region)
+            self.assertIn("name", region)
+            self.assertIn("file", region)
+            self.assertTrue(region["id"].strip())
+            self.assertTrue(region["name"].strip())
+            self.assertTrue(region["file"].strip())
+
+            region_path = manifest_path.parent / region["file"]
+            self.assertTrue(region_path.is_file(), f"Bundled map file not found: {region_path}")
+            data = json.loads(region_path.read_text(encoding="utf-8"))
+            self.assertTrue(geo.validate_map(data))
 
 
 if __name__ == "__main__":

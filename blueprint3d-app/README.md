@@ -96,6 +96,7 @@ Pushing to `main` redeploys both halves automatically.
 | Backend (FastAPI) | Render web service `blueprint3d-api` (free plan) | https://blueprint3d-api.onrender.com | `ALLOWED_ORIGINS` lists the frontend URLs |
 
 - The backend's free plan sleeps when idle, so the first upload after a quiet period can take 30-60 s.
+- Render's free plan uses an ephemeral filesystem, so server-side cached maps do not survive restarts; bundled pre-fetched regions and browser localStorage are the offline demo strategy.
 - To allow a new frontend URL, add it to `ALLOWED_ORIGINS` (comma-separated) in the Render dashboard.
 - The Vercel project's root directory is `blueprint3d-app`, so run any manual `vercel deploy` from the repository root, not from this folder.
 - Do not add a `vercel.json` with `services`: it would also try to host the backend on Vercel, whose 4.5 MB request limit rejects larger plan uploads.
@@ -119,4 +120,5 @@ your position while you walk.
 - Limits: new lookups are capped at 8 per minute for the whole server, results are one
   radius of 300 m, and there are no satellite tiles or street-level labels beyond names
   that OpenStreetMap carries.
+- Render cache limitation: Render's free plan uses an ephemeral filesystem, so server-side cached maps do not survive restarts; bundled pre-fetched regions and browser localStorage are the offline demo strategy.
 - Tests: `py -m unittest backend/test_geo.py` (no network needed).
