@@ -33,6 +33,105 @@ RADIUS_M = 300
 HTTP_TIMEOUT_S = 25
 MAX_RESPONSE_BYTES = 8_000_000
 MAX_FEATURES = 2500
+
+FEATURE_KINDS = ("road", "building", "water", "green", "place")
+# OpenStreetMap ways are not clipped to the search radius, so real maps reach about 3.5x
+# beyond it (a campus sample measures 1037 m on a 300 m radius). A point further than this
+# is almost certainly corrupt (wrong units, swapped axes), not a long road.
+MAX_EXTENT_FACTOR = 10
+
+
+def _is_number(val):
+    return isinstance(val, (int, float)) and not isinstance(val, bool) and not (math.isnan(val) or math.isinf(val))
+
+
+def validate_map(data):
+    """Validate that data conforms to the site map schema; raise GeoError(400, ...) on failure."""
+    if not isinstance(data, dict):
+        raise GeoError(400, "Site map data must be a dictionary.")
+
+    center = data.get("center")
+    if not isinstance(center, dict):
+        raise GeoError(400, "Site map must have a 'center' dictionary.")
+    lat = center.get("lat")
+    if not _is_number(lat) or not (-85 <= lat <= 85):
+        raise GeoError(400, "Center latitude must be a number between -85 and 85.")
+    lon = center.get("lon")
+    if not _is_number(lon) or not (-180 <= lon <= 180):
+        raise GeoError(400, "Center longitude must be a number between -180 and 180.")
+    name = center.get("name")
+    if not isinstance(name, str) or not name.strip():
+        raise GeoError(400, "Center name must be a non-empty string.")
+
+    radius = data.get("radius")
+    if not _is_number(radius) or radius <= 0:
+        raise GeoError(400, "Site map radius must be a positive number.")
+
+    features = data.get("features")
+    if not isinstance(features, list):
+        raise GeoError(400, "Site map features must be a list.")
+    if len(features) > MAX_FEATURES:
+        raise GeoError(400, f"Features count exceeds maximum limit of {MAX_FEATURES}.")
+    for i, f in enumerate(features):
+        if not isinstance(f, dict):
+            raise GeoError(400, f"Feature at index {i} must be a dictionary.")
+        k = f.get("k")
+        if k not in FEATURE_KINDS:
+            raise GeoError(400, f"Feature at index {i} has invalid kind {k!r}.")
+        c = f.get("c")
+        if not isinstance(c, str):
+            raise GeoError(400, f"Feature at index {i} category 'c' must be a string.")
+        p = f.get("p")
+        if not isinstance(p, list) or len(p) < 2:
+            raise GeoError(400, f"Feature at index {i} must contain at least 2 coordinate pairs in 'p'.")
+        for pt_idx, pt in enumerate(p):
+            if not isinstance(pt, (list, tuple)) or len(pt) != 2:
+                raise GeoError(400, f"Feature {i} point {pt_idx} must be a 2-element coordinate pair.")
+            if not _is_number(pt[0]) or not _is_number(pt[1]):
+                raise GeoError(400, f"Feature {i} point {pt_idx} coordinates must be numbers.")
+            if math.hypot(pt[0], pt[1]) > radius * MAX_EXTENT_FACTOR:
+                raise GeoError(400, f"Feature {i} point {pt_idx} lies too far from the map centre.")
+        if "n" in f and not isinstance(f["n"], str):
+            raise GeoError(400, f"Feature at index {i} optional name 'n' must be a string.")
+
+    places = data.get("places")
+    if not isinstance(places, list):
+        raise GeoError(400, "Site map places must be a list.")
+    for i, pl in enumerate(places):
+        if not isinstance(pl, dict):
+            raise GeoError(400, f"Place at index {i} must be a dictionary.")
+        n = pl.get("n")
+        if not isinstance(n, str) or not n.strip():
+            raise GeoError(400, f"Place at index {i} name 'n' must be a non-empty string.")
+        k = pl.get("k")
+        if k not in FEATURE_KINDS:
+            raise GeoError(400, f"Place at index {i} has invalid kind {k!r}.")
+        x, y = pl.get("x"), pl.get("y")
+        if not _is_number(x) or not _is_number(y):
+            raise GeoError(400, f"Place at index {i} coordinates 'x' and 'y' must be numbers.")
+        if math.hypot(x, y) > radius * MAX_EXTENT_FACTOR:
+            raise GeoError(400, f"Place at index {i} lies too far from the map centre.")
+        d = pl.get("d")
+        if not _is_number(d) or d < 0:
+            raise GeoError(400, f"Place at index {i} distance 'd' must be a non-negative number.")
+
+    source = data.get("source")
+    if not isinstance(source, str) or not source.strip():
+        raise GeoError(400, "Site map source must be a non-empty string.")
+    if "OpenStreetMap" not in source and "ODbL" not in source:
+        raise GeoError(400, "Site map source must mention OpenStreetMap or ODbL.")
+
+    fetched_at = data.get("fetchedAt")
+    if not isinstance(fetched_at, str) or not re.match(r"^\d{4}-\d{2}-\d{2}$", fetched_at):
+        raise GeoError(400, "Site map fetchedAt must be a date string formatted as YYYY-MM-DD.")
+    try:
+        time.strptime(fetched_at, "%Y-%m-%d")
+    except ValueError:
+        raise GeoError(400, "Site map fetchedAt must be a valid date.")
+
+    return True
+
+
 MIN_GAP_S = 1.1                 # spacing between outbound requests
 MAX_FRESH_LOOKUPS_PER_MIN = 8   # uncached lookups allowed per minute, all clients together
 CACHE_DIR = Path(os.environ.get("GEO_CACHE_DIR") or Path(__file__).resolve().parent / "geo_cache")

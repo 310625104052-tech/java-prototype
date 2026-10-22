@@ -2331,11 +2331,51 @@ input:focus-visible {
 }
 .studio-site-error {
   margin: 0;
-  padding: 9px 11px;
+  padding: 10px 12px;
   border-radius: 8px;
   font-size: 13px;
+  line-height: 1.45;
   background: var(--studio-warn-bg);
+  border: 1px solid rgba(200, 125, 18, 0.35);
   color: var(--studio-warn);
+}
+.studio-site-bundled {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.studio-site-bundled label {
+  font-size: 13px;
+  color: var(--studio-ink);
+}
+.studio-site-bundled-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.studio-site-select {
+  width: 100%;
+  padding: 9px 10px;
+  border: 1px solid var(--studio-control);
+  border-radius: 8px;
+  background: #fff;
+  color: var(--studio-ink);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+.studio-site-select:focus-visible {
+  outline: 2px solid var(--studio-blue);
+  outline-offset: 1px;
+}
+.studio-site-select:disabled {
+  background: #e5e1d8;
+  color: #7c858b;
+  cursor: not-allowed;
+}
+.studio-site-bundled-btn {
+  width: 100%;
+  justify-content: center;
 }
 .studio-site-places {
   list-style: none;

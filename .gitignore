@@ -17,3 +17,6 @@ blueprints/sample_plan.png
 # Whatever a user uploads through the web menu -- may be a real, private floor plan.
 # Never committed, regardless of file extension.
 blueprints/uploaded.*
+
+graphify-out/
+

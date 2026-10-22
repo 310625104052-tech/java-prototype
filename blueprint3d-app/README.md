@@ -64,13 +64,16 @@ npm run lint
 npm run build
 node node_modules/esbuild/bin/esbuild tests/geometry-regression.ts --bundle --platform=node --format=esm --outfile=node_modules/.cache/blueprint3d/geometry-regression.mjs
 node node_modules/.cache/blueprint3d/geometry-regression.mjs
+node node_modules/esbuild/bin/esbuild tests/geo-regression.ts --bundle --platform=node --format=esm --outfile=node_modules/.cache/blueprint3d/geo-regression.mjs
+node node_modules/.cache/blueprint3d/geo-regression.mjs
 ```
 
 Twenty backend regression methods cover clean black/gray inputs, smaller images,
 outline/reference imports, invalid/blank content, nested transformed DXF blocks,
 explicit review state, geometry holes, opening heights and door evidence.
 Three.js checks cover concave/holed meshes, bounds, dimensions, spawn/door clearance
-and manual tracing. Optional JSON-response paths passed to the last command check
+and manual tracing. Geo tests cover plan-to-map rotation, distance invariance,
+compass gaze heading calculation, and per-plan localStorage persistence. Optional JSON-response paths passed to the last command check
 saved real detections too.
 
 The variety suite checks 46 synthetic variants, including mixed exterior/partition
@@ -96,6 +99,7 @@ Pushing to `main` redeploys both halves automatically.
 | Backend (FastAPI) | Render web service `blueprint3d-api` (free plan) | https://blueprint3d-api.onrender.com | `ALLOWED_ORIGINS` lists the frontend URLs |
 
 - The backend's free plan sleeps when idle, so the first upload after a quiet period can take 30-60 s.
+- Render's free plan uses an ephemeral filesystem, so server-side cached maps do not survive restarts; bundled pre-fetched regions and browser localStorage are the offline demo strategy.
 - To allow a new frontend URL, add it to `ALLOWED_ORIGINS` (comma-separated) in the Render dashboard.
 - The Vercel project's root directory is `blueprint3d-app`, so run any manual `vercel deploy` from the repository root, not from this folder.
 - Do not add a `vercel.json` with `services`: it would also try to host the backend on Vercel, whose 4.5 MB request limit rejects larger plan uploads.
@@ -119,4 +123,11 @@ your position while you walk.
 - Limits: new lookups are capped at 8 per minute for the whole server, results are one
   radius of 300 m, and there are no satellite tiles or street-level labels beyond names
   that OpenStreetMap carries.
-- Tests: `py -m unittest backend/test_geo.py` (no network needed).
+- Render cache limitation: Render's free plan uses an ephemeral filesystem, so server-side cached maps do not survive restarts; bundled pre-fetched regions and browser localStorage are the offline demo strategy.
+- Offline region bundling tool: developers can pre-fetch and bundle new regions for offline use with `backend/fetch_region.py`:
+  ```text
+  py backend/fetch_region.py "SRM Easwari Engineering College, Ramapuram, Chennai"
+  py backend/fetch_region.py "13.033779, 80.180058" chennai-campus.json --name "Chennai Campus"
+  ```
+  The tool resolves the location, queries Overpass mirrors with polite request spacing and automatic fallback, validates schema compliance, writes `public/geo/<filename>`, and registers the region in `public/geo/regions.json`.
+- Tests: `py -m unittest backend/test_geo.py` and `py -m unittest backend/test_fetch_region.py` (no network needed).
