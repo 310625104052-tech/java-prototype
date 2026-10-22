@@ -12,6 +12,12 @@ export interface SiteMapData {
   fetchedAt: string;
 }
 
+export interface BundledRegion {
+  id: string;
+  name: string;
+  file: string;
+}
+
 const API_BASE = (import.meta.env.VITE_API_URL ?? '').replace(/\/+$/, '');
 const CACHE_PREFIX = 'b3d.sitemap.';
 
@@ -34,11 +40,23 @@ function writeCache(query: string, map: SiteMapData) {
   }
 }
 
+/** Bundled regions catalogue for offline map picker. */
+export async function loadBundledRegions(): Promise<BundledRegion[]> {
+  const response = await fetch('/geo/regions.json');
+  if (!response.ok) throw new Error('The bundled regions list could not be loaded.');
+  return (await response.json()) as BundledRegion[];
+}
+
+/** Load a bundled map by filename from the offline catalogue. */
+export async function loadBundledRegion(file: string): Promise<SiteMapData> {
+  const response = await fetch(`/geo/${file}`);
+  if (!response.ok) throw new Error('The bundled map could not be loaded.');
+  return (await response.json()) as SiteMapData;
+}
+
 /** Bundled map of the demo campus; needs no network and no backend. */
 export async function loadSampleSite(): Promise<SiteMapData> {
-  const response = await fetch('/geo/sample-chennai.json');
-  if (!response.ok) throw new Error('The bundled sample map could not be loaded.');
-  return (await response.json()) as SiteMapData;
+  return loadBundledRegion('sample-chennai.json');
 }
 
 /** Map for a place name or "lat, lon". A map seen before opens from the browser cache. */
@@ -53,11 +71,11 @@ export async function lookupSite(query: string): Promise<SiteMapData> {
       body: JSON.stringify({ query }),
     });
   } catch {
-    throw new Error('Could not reach the server. Saved maps and the sample still work offline.');
+    throw new Error('The live map service could not be reached. Saved maps and bundled regions below still work offline.');
   }
   const body = await response.json().catch(() => null);
   if (!response.ok || !body?.success) {
-    throw new Error(body?.error || 'The map lookup failed. Try again in a moment.');
+    throw new Error('The live map service could not be reached. Saved maps and bundled regions below still work offline.');
   }
   writeCache(query, body.map as SiteMapData);
   return body.map as SiteMapData;

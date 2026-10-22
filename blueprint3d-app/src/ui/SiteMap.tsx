@@ -3,7 +3,8 @@ import { Loader2, MapPin, Search, X, ZoomIn, ZoomOut } from 'lucide-react';
 import type { FloorPlanData } from '../types/floorplan';
 import { StudioMark } from './StudioMark';
 import {
-  GeoFeature, SiteMapData, gazeBearing, loadSampleSite, lookupSite, planToMap,
+  BundledRegion, GeoFeature, SiteMapData, gazeBearing, loadBundledRegion,
+  loadBundledRegions, lookupSite, planToMap,
 } from '../utils/geoMap';
 
 interface SiteMapProps {
@@ -30,6 +31,8 @@ export function SiteMap({ isOpen, floorPlan, playerPos, onClose }: SiteMapProps)
   const [error, setError] = useState<string | null>(null);
   const [bearing, setBearing] = useState(0);
   const [zoom, setZoom] = useState(1);
+  const [regions, setRegions] = useState<BundledRegion[]>([]);
+  const [selectedRegionId, setSelectedRegionId] = useState<string>('');
 
   useEffect(() => {
     if (!isOpen) return;
@@ -38,27 +41,68 @@ export function SiteMap({ isOpen, floorPlan, playerPos, onClose }: SiteMapProps)
     return () => window.removeEventListener('keydown', onKey);
   }, [isOpen, onClose]);
 
-  const run = async (task: () => Promise<SiteMapData>) => {
+  useEffect(() => {
+    if (!isOpen) return;
+    let active = true;
+    loadBundledRegions()
+      .then((list) => {
+        if (!active) return;
+        setRegions(list);
+        if (list.length > 0) {
+          setSelectedRegionId((prev) => (list.some((r) => r.id === prev) ? prev : list[0].id));
+        }
+      })
+      .catch(() => {
+        if (!active) return;
+        const fallback: BundledRegion[] = [
+          {
+            id: 'srm-easwari',
+            name: 'SRM Easwari Engineering College, Ramapuram, Chennai',
+            file: 'sample-chennai.json',
+          },
+        ];
+        setRegions(fallback);
+        setSelectedRegionId((prev) => (fallback.some((r) => r.id === prev) ? prev : fallback[0].id));
+      });
+    return () => {
+      active = false;
+    };
+  }, [isOpen]);
+
+  // Open zoomed so the building is clearly visible: about a fifth of the view across.
+  const span = Math.max(floorPlan.bounds.maxX - floorPlan.bounds.minX, floorPlan.bounds.maxY - floorPlan.bounds.minY, 5);
+  const fitZoom = Math.min(6, Math.max(1, 300 / (span * 5)));
+
+  const handleSelectRegion = async (region: BundledRegion) => {
+    setSelectedRegionId(region.id);
     setBusy(true);
     setError(null);
     try {
-      setSite(await task());
+      const data = await loadBundledRegion(region.file);
+      setSite(data);
       setZoom(fitZoom);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'The map could not be loaded.');
+      setError(err instanceof Error ? err.message : 'The bundled map could not be loaded.');
     } finally {
       setBusy(false);
     }
   };
 
-  const submit = (e: FormEvent) => {
+  const submit = async (e: FormEvent) => {
     e.preventDefault();
-    if (query.trim().length >= 3) void run(() => lookupSite(query));
+    if (query.trim().length < 3) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const data = await lookupSite(query);
+      setSite(data);
+      setZoom(fitZoom);
+    } catch {
+      setError('The live map service could not be reached. Saved maps and bundled regions below still work offline.');
+    } finally {
+      setBusy(false);
+    }
   };
-
-  // Open zoomed so the building is clearly visible: about a fifth of the view across.
-  const span = Math.max(floorPlan.bounds.maxX - floorPlan.bounds.minX, floorPlan.bounds.maxY - floorPlan.bounds.minY, 5);
-  const fitZoom = Math.min(6, Math.max(1, 300 / (span * 5)));
 
   const centre = useMemo(() => ({
     x: (floorPlan.bounds.minX + floorPlan.bounds.maxX) / 2,
@@ -84,6 +128,7 @@ export function SiteMap({ isOpen, floorPlan, playerPos, onClose }: SiteMapProps)
   const polygons = (kind: string) => (site?.features ?? []).filter((f) => f.k === kind);
   const roads = polygons('road') as GeoFeature[];
   const heading = Math.round(gazeBearing(playerPos.yaw, bearing));
+  const activeRegion = regions.find((r) => r.id === selectedRegionId) ?? regions[0];
 
   return (
     <div className="studio-modal-backdrop" onClick={onClose} data-ui>
@@ -116,10 +161,51 @@ export function SiteMap({ isOpen, floorPlan, playerPos, onClose }: SiteMapProps)
                 </button>
               </div>
             </form>
-            <button type="button" className="studio-secondary" disabled={busy} onClick={() => void run(loadSampleSite)}>
-              <MapPin size={15} aria-hidden="true" /> Use the sample campus (works offline)
-            </button>
-            {error && <p className="studio-site-error" role="alert">{error}</p>}
+
+            {error && (
+              <div className="studio-site-error" role="alert">
+                {error}
+              </div>
+            )}
+
+            <div className="studio-site-bundled">
+              <label htmlFor="bundled-region-select">Bundled offline regions</label>
+              <div className="studio-site-bundled-controls">
+                <select
+                  id="bundled-region-select"
+                  className="studio-site-select"
+                  value={selectedRegionId}
+                  disabled={busy || regions.length === 0}
+                  onChange={(e) => {
+                    const id = e.target.value;
+                    setSelectedRegionId(id);
+                    const region = regions.find((r) => r.id === id);
+                    if (region) void handleSelectRegion(region);
+                  }}
+                  aria-label="Bundled offline regions"
+                >
+                  {regions.length === 0 ? (
+                    <option value="">Loading offline regions…</option>
+                  ) : (
+                    regions.map((r) => (
+                      <option key={r.id} value={r.id}>
+                        {r.name}
+                      </option>
+                    ))
+                  )}
+                </select>
+                <button
+                  type="button"
+                  className="studio-secondary studio-site-bundled-btn"
+                  disabled={busy || !activeRegion}
+                  onClick={() => {
+                    if (activeRegion) void handleSelectRegion(activeRegion);
+                  }}
+                >
+                  <MapPin size={15} aria-hidden="true" /> Use bundled region (works offline)
+                </button>
+              </div>
+            </div>
 
             <label className="studio-site-slider">
               Plan top points to {bearing}° ({compass(bearing)})
@@ -148,7 +234,7 @@ export function SiteMap({ isOpen, floorPlan, playerPos, onClose }: SiteMapProps)
             {!site ? (
               <div className="studio-site-empty">
                 <MapPin size={28} aria-hidden="true" />
-                <p>Enter where the building stands, or open the sample campus, to see the roads and buildings around it.</p>
+                <p>Enter where the building stands, or open a bundled region, to see the roads and buildings around it.</p>
               </div>
             ) : (
               <>
