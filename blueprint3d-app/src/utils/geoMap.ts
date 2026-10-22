@@ -23,6 +23,7 @@ export interface BundledRegion {
 export interface PlanMapState {
   bearing: number;
   placeQuery?: string;
+  query?: string;
   regionFile?: string;
 }
 
@@ -138,14 +139,28 @@ export function loadPlanMapState(key: string): PlanMapState | null {
     const data = JSON.parse(raw);
     if (!data || typeof data !== 'object') return null;
     if (typeof data.bearing !== 'number' || !Number.isFinite(data.bearing)) return null;
+    const q =
+      (typeof data.placeQuery === 'string' && data.placeQuery.trim()) ||
+      (typeof data.query === 'string' && data.query.trim()) ||
+      undefined;
+    const regionFile =
+      typeof data.regionFile === 'string' && data.regionFile.trim()
+        ? data.regionFile.trim()
+        : undefined;
+
+    if (!q && !regionFile) return null;
+
     const state: PlanMapState = {
       bearing: ((data.bearing % 360) + 360) % 360,
     };
     if (typeof data.placeQuery === 'string' && data.placeQuery.trim()) {
       state.placeQuery = data.placeQuery.trim();
     }
-    if (typeof data.regionFile === 'string' && data.regionFile.trim()) {
-      state.regionFile = data.regionFile.trim();
+    if (typeof data.query === 'string' && data.query.trim()) {
+      state.query = data.query.trim();
+    }
+    if (regionFile) {
+      state.regionFile = regionFile;
     }
     return state;
   } catch {
@@ -166,6 +181,9 @@ export function savePlanMapState(key: string, state: PlanMapState): void {
     };
     if (typeof state.placeQuery === 'string' && state.placeQuery.trim()) {
       toSave.placeQuery = state.placeQuery.trim();
+    }
+    if (typeof state.query === 'string' && state.query.trim()) {
+      toSave.query = state.query.trim();
     }
     if (typeof state.regionFile === 'string' && state.regionFile.trim()) {
       toSave.regionFile = state.regionFile.trim();

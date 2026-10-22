@@ -107,17 +107,18 @@ export function SiteMap({ isOpen, floorPlan, playerPos, onClose }: SiteMapProps)
       setBearing(saved.bearing);
     }
 
+    const savedQuery = saved.placeQuery || saved.query;
     if (saved.regionFile) {
       setRegionFile(saved.regionFile);
       setPlaceQuery(undefined);
       setQuery('');
       void run(async () => loadBundledRegion(saved.regionFile!));
-    } else if (saved.placeQuery) {
-      setPlaceQuery(saved.placeQuery);
+    } else if (savedQuery) {
+      setPlaceQuery(savedQuery);
       setRegionFile(undefined);
-      setQuery(saved.placeQuery);
+      setQuery(savedQuery);
 
-      const cached = readCache(saved.placeQuery);
+      const cached = readCache(savedQuery);
       if (cached) {
         setSite(cached);
         setZoom(fitZoom);
