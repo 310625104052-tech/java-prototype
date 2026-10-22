@@ -121,4 +121,10 @@ your position while you walk.
   radius of 300 m, and there are no satellite tiles or street-level labels beyond names
   that OpenStreetMap carries.
 - Render cache limitation: Render's free plan uses an ephemeral filesystem, so server-side cached maps do not survive restarts; bundled pre-fetched regions and browser localStorage are the offline demo strategy.
-- Tests: `py -m unittest backend/test_geo.py` (no network needed).
+- Offline region bundling tool: developers can pre-fetch and bundle new regions for offline use with `backend/fetch_region.py`:
+  ```text
+  py backend/fetch_region.py "SRM Easwari Engineering College, Ramapuram, Chennai"
+  py backend/fetch_region.py "13.033779, 80.180058" chennai-campus.json --name "Chennai Campus"
+  ```
+  The tool resolves the location, queries Overpass mirrors with polite request spacing and automatic fallback, validates schema compliance, writes `public/geo/<filename>`, and registers the region in `public/geo/regions.json`.
+- Tests: `py -m unittest backend/test_geo.py` and `py -m unittest backend/test_fetch_region.py` (no network needed).
