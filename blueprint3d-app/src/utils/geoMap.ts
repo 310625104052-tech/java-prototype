@@ -1,3 +1,5 @@
+import type { FloorPlanData } from '../types/floorplan';
+
 /** Site map data: types, lookup with a browser cache, and the plan-to-map transform. */
 
 export type GeoKind = 'road' | 'building' | 'water' | 'green' | 'place';
@@ -12,7 +14,7 @@ export interface SiteMapData {
   fetchedAt: string;
 }
 
-const API_BASE = (import.meta.env.VITE_API_URL ?? '').replace(/\/+$/, '');
+const API_BASE = (import.meta.env?.VITE_API_URL ?? '').replace(/\/+$/, '');
 const CACHE_PREFIX = 'b3d.sitemap.';
 
 const cacheKey = (query: string) => CACHE_PREFIX + query.trim().toLowerCase().replace(/\s+/g, ' ');
@@ -78,4 +80,47 @@ export function planToMap(px: number, py: number, centre: { x: number; y: number
 export function gazeBearing(yaw: number, bearingDeg: number): number {
   // Controller yaw 0 looks along -z, i.e. the plan's top edge; positive yaw turns left.
   return (((bearingDeg - (yaw * 180) / Math.PI) % 360) + 360) % 360;
+}
+
+export interface PlanMapState {
+  bearing: number;
+  query: string;
+}
+
+/** Storage key for persisting bearing and place selection per plan. */
+export function getPlanStorageKey(floorPlan: FloorPlanData): string {
+  const name = (floorPlan.name || 'unnamed').trim().toLowerCase().replace(/\s+/g, '_');
+  const walls = floorPlan.walls ? floorPlan.walls.length : 0;
+  const b = floorPlan.bounds || { minX: 0, minY: 0, maxX: 0, maxY: 0 };
+  return `b3d.planmap.${name}.${walls}.${b.minX}_${b.minY}_${b.maxX}_${b.maxY}`;
+}
+
+/** Loads stored bearing and place for a plan key, or null if missing or corrupt. */
+export function loadPlanMapState(key: string): PlanMapState | null {
+  try {
+    if (typeof localStorage === 'undefined') return null;
+    const raw = localStorage.getItem(key);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+    if (typeof parsed.bearing !== 'number' || !Number.isFinite(parsed.bearing) || typeof parsed.query !== 'string') {
+      return null;
+    }
+    return {
+      bearing: parsed.bearing,
+      query: parsed.query,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/** Saves bearing and place for a plan key, failing silently if storage is unavailable. */
+export function savePlanMapState(key: string, state: PlanMapState): void {
+  try {
+    if (typeof localStorage === 'undefined') return;
+    localStorage.setItem(key, JSON.stringify(state));
+  } catch {
+    /* storage full or blocked: fail gracefully */
+  }
 }
