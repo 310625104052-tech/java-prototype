@@ -64,13 +64,16 @@ npm run lint
 npm run build
 node node_modules/esbuild/bin/esbuild tests/geometry-regression.ts --bundle --platform=node --format=esm --outfile=node_modules/.cache/blueprint3d/geometry-regression.mjs
 node node_modules/.cache/blueprint3d/geometry-regression.mjs
+node node_modules/esbuild/bin/esbuild tests/geo-regression.ts --bundle --platform=node --format=esm --outfile=node_modules/.cache/blueprint3d/geo-regression.mjs
+node node_modules/.cache/blueprint3d/geo-regression.mjs
 ```
 
 Twenty backend regression methods cover clean black/gray inputs, smaller images,
 outline/reference imports, invalid/blank content, nested transformed DXF blocks,
 explicit review state, geometry holes, opening heights and door evidence.
 Three.js checks cover concave/holed meshes, bounds, dimensions, spawn/door clearance
-and manual tracing. Optional JSON-response paths passed to the last command check
+and manual tracing. Geo tests cover plan-to-map rotation, distance invariance,
+compass gaze heading calculation, and per-plan localStorage persistence. Optional JSON-response paths passed to the last command check
 saved real detections too.
 
 The variety suite checks 46 synthetic variants, including mixed exterior/partition
