@@ -125,6 +125,7 @@ export function SiteMap({ isOpen, floorPlan, playerPos, onClose }: SiteMapProps)
         setError(null);
       } else {
         setSite(null);
+        setError(`"${savedQuery}" is not saved on this device. Press Find to look it up, or pick a bundled region.`);
       }
     } else {
       setPlaceQuery(undefined);

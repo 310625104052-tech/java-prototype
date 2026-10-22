@@ -35,6 +35,10 @@ MAX_RESPONSE_BYTES = 8_000_000
 MAX_FEATURES = 2500
 
 FEATURE_KINDS = ("road", "building", "water", "green", "place")
+# OpenStreetMap ways are not clipped to the search radius, so real maps reach about 3.5x
+# beyond it (a campus sample measures 1037 m on a 300 m radius). A point further than this
+# is almost certainly corrupt (wrong units, swapped axes), not a long road.
+MAX_EXTENT_FACTOR = 10
 
 
 def _is_number(val):
@@ -85,6 +89,8 @@ def validate_map(data):
                 raise GeoError(400, f"Feature {i} point {pt_idx} must be a 2-element coordinate pair.")
             if not _is_number(pt[0]) or not _is_number(pt[1]):
                 raise GeoError(400, f"Feature {i} point {pt_idx} coordinates must be numbers.")
+            if math.hypot(pt[0], pt[1]) > radius * MAX_EXTENT_FACTOR:
+                raise GeoError(400, f"Feature {i} point {pt_idx} lies too far from the map centre.")
         if "n" in f and not isinstance(f["n"], str):
             raise GeoError(400, f"Feature at index {i} optional name 'n' must be a string.")
 
@@ -103,6 +109,8 @@ def validate_map(data):
         x, y = pl.get("x"), pl.get("y")
         if not _is_number(x) or not _is_number(y):
             raise GeoError(400, f"Place at index {i} coordinates 'x' and 'y' must be numbers.")
+        if math.hypot(x, y) > radius * MAX_EXTENT_FACTOR:
+            raise GeoError(400, f"Place at index {i} lies too far from the map centre.")
         d = pl.get("d")
         if not _is_number(d) or d < 0:
             raise GeoError(400, f"Place at index {i} distance 'd' must be a non-negative number.")

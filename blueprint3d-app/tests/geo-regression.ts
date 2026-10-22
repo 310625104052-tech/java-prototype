@@ -4,6 +4,7 @@ import {
   gazeBearing,
   getPlanStorageKey,
   loadPlanMapState,
+  lookupSite,
   savePlanMapState,
   type PlanMapState,
 } from '../src/utils/geoMap';
@@ -305,8 +306,9 @@ assert.equal(loadPlanMapState('corrupt.null'), null, 'Null JSON must return null
 mockLocalStorage.setItem('corrupt.missing_bearing', JSON.stringify({ query: 'Missing bearing' }));
 assert.equal(loadPlanMapState('corrupt.missing_bearing'), null, 'Object missing bearing must return null');
 
-mockLocalStorage.setItem('corrupt.missing_query', JSON.stringify({ bearing: 90 }));
-assert.equal(loadPlanMapState('corrupt.missing_query'), null, 'Object missing query must return null');
+// A bearing set before any place is chosen must survive a reload.
+mockLocalStorage.setItem('bearing.only', JSON.stringify({ bearing: 90 }));
+assert.deepEqual(loadPlanMapState('bearing.only'), { bearing: 90 }, 'Bearing without a place must be kept');
 
 mockLocalStorage.setItem('corrupt.non_numeric_bearing', JSON.stringify({ bearing: '90', query: 'Bad bearing' }));
 assert.equal(loadPlanMapState('corrupt.non_numeric_bearing'), null, 'Non-numeric bearing must return null');
@@ -342,6 +344,36 @@ savePlanMapState(keyA, stateA);
 assert.deepEqual(loadPlanMapState(keyA), stateA, 'Storage continues functioning normally after error handling');
 
 console.log('✓ Suite C passed (per-plan storage round-trip, plan isolation, corruption recovery, and error resilience).');
+
+// ---------------------------------------------------------------------------
+// Suite D: lookup errors keep the server's reason (`lookupSite`)
+// ---------------------------------------------------------------------------
+console.log('Testing Suite D: lookupSite error messages...');
+
+const realFetch = globalThis.fetch;
+const stubFetch = (impl: () => Promise<unknown>) => { globalThis.fetch = impl as unknown as typeof fetch; };
+const jsonResponse = (status: number, body: unknown) =>
+  Promise.resolve({ ok: status < 400, status, json: () => Promise.resolve(body) });
+
+await (async () => {
+  try {
+    stubFetch(() => jsonResponse(404, { success: false, error: 'No place matched that search.' }));
+    await assert.rejects(lookupSite('nowhere at all'), /No place matched that search\..*bundled regions/,
+      'A server rejection must keep its own message and point to bundled regions');
+
+    stubFetch(() => jsonResponse(500, null));
+    await assert.rejects(lookupSite('another unknown place'), /HTTP 500.*bundled regions/,
+      'A server error without a message must report the HTTP status');
+
+    stubFetch(() => Promise.reject(new TypeError('Failed to fetch')));
+    await assert.rejects(lookupSite('offline place'), /could not be reached.*bundled regions/,
+      'A network failure must say the service could not be reached');
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+})();
+
+console.log('✓ Suite D passed (server reasons kept, network failure worded separately).');
 
 // ---------------------------------------------------------------------------
 console.log('All geo regression tests passed successfully!');

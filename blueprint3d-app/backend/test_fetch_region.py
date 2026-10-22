@@ -99,7 +99,7 @@ class FetchRegionTests(unittest.TestCase):
         stderr = io.StringIO()
         with mock.patch("sys.stderr", stderr):
             code = fetch_region.main([
-                "13.033779, 80.180058",
+                "13.0005, 80.0005",
                 "chennai-campus.json",
                 "--name",
                 "Chennai Campus",
@@ -217,7 +217,7 @@ class FetchRegionTests(unittest.TestCase):
 
         # 1. Update existing entry by matching filename
         code = fetch_region.main([
-            "13.033779, 80.180058",
+            "13.0005, 80.0005",
             "sample-chennai.json",
             "--name",
             "Updated Campus Display Name",

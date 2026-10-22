@@ -173,6 +173,16 @@ class GeoTests(unittest.TestCase):
                 bad = dict(valid, features=[{"k": "road", "c": "primary", "p": bad_p}])
                 geo.validate_map(bad)
 
+        # points far outside the search area (wrong units or swapped axes)
+        far = valid["radius"] * geo.MAX_EXTENT_FACTOR + 1
+        with self.assertRaises(geo.GeoError):
+            bad = dict(valid, features=[{"k": "road", "c": "primary", "p": [[0.0, 0.0], [far, 0.0]]}])
+            geo.validate_map(bad)
+
+        with self.assertRaises(geo.GeoError):
+            bad = dict(valid, places=[{"n": "Spot", "k": "road", "x": far, "y": 0.0, "d": 5.0}])
+            geo.validate_map(bad)
+
         # bad places
         with self.assertRaises(geo.GeoError):
             bad = dict(valid, places=[{"n": "Spot", "k": "unknown_kind", "x": 1.0, "y": 2.0, "d": 5.0}])

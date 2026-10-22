@@ -30,6 +30,7 @@ export interface PlanMapState {
 const API_BASE = (import.meta.env?.VITE_API_URL ?? '').replace(/\/+$/, '');
 const CACHE_PREFIX = 'b3d.sitemap.';
 const PLAN_STATE_PREFIX = 'b3d.planmap.';
+const OFFLINE_HINT = 'Saved maps and bundled regions below still work offline.';
 
 const cacheKey = (query: string) => CACHE_PREFIX + query.trim().toLowerCase().replace(/\s+/g, ' ');
 
@@ -84,11 +85,15 @@ export async function lookupSite(query: string): Promise<SiteMapData> {
       body: JSON.stringify({ query }),
     });
   } catch {
-    throw new Error('The live map service could not be reached. Saved maps and bundled regions below still work offline.');
+    throw new Error(`The live map service could not be reached. ${OFFLINE_HINT}`);
   }
   const body = await response.json().catch(() => null);
   if (!response.ok || !body?.success) {
-    throw new Error('The live map service could not be reached. Saved maps and bundled regions below still work offline.');
+    // Keep the server's own message (not found, rate limit, bad input); it is not a network failure.
+    const reason = typeof body?.error === 'string' && body.error.trim()
+      ? body.error.trim()
+      : `The map lookup failed (HTTP ${response.status}).`;
+    throw new Error(`${reason} ${OFFLINE_HINT}`);
   }
   writeCache(query, body.map as SiteMapData);
   return body.map as SiteMapData;
@@ -148,8 +153,7 @@ export function loadPlanMapState(key: string): PlanMapState | null {
         ? data.regionFile.trim()
         : undefined;
 
-    if (!q && !regionFile) return null;
-
+    // A bearing alone is kept: the user may orient the building before choosing a place.
     const state: PlanMapState = {
       bearing: ((data.bearing % 360) + 360) % 360,
     };
