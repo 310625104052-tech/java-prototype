@@ -9,3 +9,6 @@ __pycache__/
 
 .vercel
 .env*
+
+# Cached site maps (regenerated on demand)
+backend/geo_cache/

@@ -2271,3 +2271,147 @@ input:focus-visible {
   .studio-wordmark {font-size:25px;}
   .studio-motion {gap:6px;font-size:11px;}
 }
+
+/* ---- Site map ------------------------------------------------------------ */
+.studio-site-body {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(260px, 340px) 1fr;
+}
+.studio-site-side {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 18px 20px;
+  overflow-y: auto;
+  border-right: 1px solid var(--studio-line);
+  background: var(--studio-paper);
+}
+.studio-site-side h3 {
+  margin: 6px 0 0;
+  font-size: 12px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--studio-muted);
+}
+.studio-site-search label,
+.studio-site-slider {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--studio-ink);
+}
+.studio-site-search > div {
+  display: flex;
+  gap: 8px;
+}
+.studio-site-search input {
+  flex: 1;
+  min-width: 0;
+  padding: 9px 10px;
+  border: 1px solid var(--studio-control);
+  border-radius: 8px;
+  background: #fff;
+  color: var(--studio-ink);
+  font: inherit;
+  font-size: 13px;
+}
+.studio-site-search input:focus-visible {
+  outline: 2px solid var(--studio-blue);
+  outline-offset: 1px;
+}
+.studio-site-note,
+.studio-site-credit {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--studio-muted);
+}
+.studio-site-error {
+  margin: 0;
+  padding: 9px 11px;
+  border-radius: 8px;
+  font-size: 13px;
+  background: var(--studio-warn-bg);
+  color: var(--studio-warn);
+}
+.studio-site-places {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 13px;
+}
+.studio-site-places li {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+}
+.studio-site-places em {
+  font-style: normal;
+  color: var(--studio-muted);
+  font-variant-numeric: tabular-nums;
+}
+.studio-site-canvas {
+  position: relative;
+  min-height: 0;
+  background: #f3efe6;
+}
+.studio-site-canvas svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+.studio-site-empty {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 24px;
+  text-align: center;
+  color: var(--studio-muted);
+  font-size: 14px;
+}
+.studio-site-zoom {
+  position: absolute;
+  right: 14px;
+  bottom: 14px;
+  display: flex;
+  gap: 6px;
+}
+.studio-site-heading {
+  position: absolute;
+  left: 14px;
+  top: 14px;
+  padding: 5px 10px;
+  border-radius: 999px;
+  background: rgba(255, 253, 249, 0.92);
+  border: 1px solid var(--studio-line);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.studio-spin {
+  animation: studio-spin 0.8s linear infinite;
+}
+@media (max-width: 760px) {
+  .studio-site-body {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto minmax(260px, 1fr);
+  }
+  .studio-site-side {
+    border-right: 0;
+    border-bottom: 1px solid var(--studio-line);
+    max-height: 46vh;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .studio-spin {
+    animation: none;
+  }
+}

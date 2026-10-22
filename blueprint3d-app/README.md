@@ -99,3 +99,24 @@ Pushing to `main` redeploys both halves automatically.
 - To allow a new frontend URL, add it to `ALLOWED_ORIGINS` (comma-separated) in the Render dashboard.
 - The Vercel project's root directory is `blueprint3d-app`, so run any manual `vercel deploy` from the repository root, not from this folder.
 - Do not add a `vercel.json` with `services`: it would also try to host the backend on Vercel, whose 4.5 MB request limit rejects larger plan uploads.
+
+## Site map
+
+The Site map button (overview toolbar and pause menu) shows the roads, buildings,
+water, green areas and named places around the building, with the plan's outline and
+your position while you walk.
+
+- Data is OpenStreetMap (ODbL), fetched once per place: `POST /api/geo/lookup` takes a
+  place name or `lat, lon`, geocodes it with Nominatim, reads the surroundings (300 m)
+  from a public Overpass server, and returns a small vector map in metres. The server
+  keeps each result on disk and the browser keeps it in `localStorage`, so a map you
+  have opened works with no internet. Public Overpass servers are often busy; the
+  backend tries several and reports a clear error if none answers.
+- The sample campus (SRM Easwari College, Ramapuram) is bundled in
+  `public/geo/sample-chennai.json` and needs no network or backend.
+- A floor plan does not say which way is north, so the map has a rotation slider for
+  the plan. The default of 0 puts the top of the plan at north.
+- Limits: new lookups are capped at 8 per minute for the whole server, results are one
+  radius of 300 m, and there are no satellite tiles or street-level labels beyond names
+  that OpenStreetMap carries.
+- Tests: `py -m unittest backend/test_geo.py` (no network needed).

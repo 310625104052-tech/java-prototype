@@ -17,6 +17,7 @@ import { DetailedMapModal } from './DetailedMapModal';
 import { FloorPlanInspector } from './FloorPlanInspector';
 import { StartScreen } from './StartScreen';
 import { Minimap } from './Minimap';
+import { SiteMap } from './SiteMap';
 import { LocationSystem } from '../navigation/LocationSystem';
 
 interface UIManagerProps {
@@ -68,6 +69,7 @@ export const UIManager = memo(function UIManager({
   onNewUpload,
 }: UIManagerProps) {
   const [showJsonInspector, setShowJsonInspector] = useState(false);
+  const [showSiteMap, setShowSiteMap] = useState(false);
 
   const locationInfo = LocationSystem.getLocationInfo(
     playerPos.x,
@@ -77,7 +79,7 @@ export const UIManager = memo(function UIManager({
   );
 
   const showReadyCard =
-    hasModel && !isOverview && !isLocked && !showDetailedMap && !showJsonInspector;
+    hasModel && !isOverview && !isLocked && !showDetailedMap && !showJsonInspector && !showSiteMap;
 
   const spanW = Math.round(floorPlan.bounds.maxX - floorPlan.bounds.minX);
   const spanD = Math.round(floorPlan.bounds.maxY - floorPlan.bounds.minY);
@@ -128,6 +130,15 @@ export const UIManager = memo(function UIManager({
               >
                 <Navigation size={15} aria-hidden="true" />
                 <span className="studio-hide-tablet">2D Plan</span>
+              </button>
+              <button
+                type="button"
+                className="studio-secondary"
+                onClick={() => setShowSiteMap(true)}
+                title="See the roads and buildings around the site"
+              >
+                <MapPin size={15} aria-hidden="true" />
+                <span className="studio-hide-tablet">Site map</span>
               </button>
               <button
                 type="button"
@@ -258,6 +269,9 @@ export const UIManager = memo(function UIManager({
               <button type="button" onClick={() => onShowDetailedMap(true)}>
                 <Navigation size={15} aria-hidden="true" /> Map
               </button>
+              <button type="button" onClick={() => setShowSiteMap(true)}>
+                <MapPin size={15} aria-hidden="true" /> Site map
+              </button>
               <button type="button" onClick={() => setShowJsonInspector(true)}>
                 <Code2 size={15} aria-hidden="true" /> Model data
               </button>
@@ -306,6 +320,12 @@ export const UIManager = memo(function UIManager({
         playerPos={playerPos}
         onClose={() => onShowDetailedMap(false)}
         onTeleport={onTeleport}
+      />
+      <SiteMap
+        isOpen={showSiteMap}
+        floorPlan={floorPlan}
+        playerPos={playerPos}
+        onClose={() => setShowSiteMap(false)}
       />
       <FloorPlanInspector
         floorPlan={floorPlan}

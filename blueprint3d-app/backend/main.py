@@ -10,6 +10,7 @@ from fastapi import FastAPI, File, UploadFile, HTTPException, status, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
+from pydantic import BaseModel
 import uvicorn
 
 logger = logging.getLogger("blueprint3d")
@@ -116,6 +117,23 @@ async def detect_blueprint_get_help():
             "error": "The /api/blueprint/detect endpoint requires an HTTP POST request with a multipart/form-data 'file' field containing a PNG or JPEG blueprint image."
         }
     )
+
+
+class GeoQuery(BaseModel):
+    query: str
+
+
+@app.post("/api/geo/lookup")
+def geo_lookup(body: GeoQuery):
+    """Surroundings of a place name or 'lat, lon' as a small vector map (OpenStreetMap)."""
+    try:
+        from backend import geo
+    except ImportError:
+        import geo
+    try:
+        return {"success": True, "map": geo.lookup(body.query)}
+    except geo.GeoError as exc:
+        return JSONResponse(status_code=exc.status, content={"success": False, "error": exc.message})
 
 
 def _error(code: int, message: str) -> JSONResponse:
